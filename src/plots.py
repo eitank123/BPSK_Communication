@@ -25,41 +25,86 @@ def plot_BER_vs_SNR(ber_plot_values, series_labels=None):
         if np.any(valid):
             plt.semilogy(np.array(SNR)[valid], ber_curve_arr[valid], 'b-o', linewidth=2, markersize=8)
 
-    plt.title('BPSK Bit Error Rate (BER) vs. SNR')
-    plt.xlabel('SNR (dB)')
+    plt.title('QPSK Bit Error Rate (BER) vs. Eb/N0')
+    plt.xlabel('Eb/N0 (dB)')
     plt.ylabel('Bit Error Rate (BER)')
     plt.grid(True, which='both', linestyle='--', alpha=0.7)
 
     plt.show()
 
 
-def plot_eye_diagram(rx_before, rx_after, sps, snr):
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+def plot_eye_diagram(rx_before, rx_after, sps, snr, detected_delay=0, preamble_length=0):
+    """
+    Plot eye diagram for QPSK signals (handles complex signals).
+    
+    rx_before: received signal before matched filter
+    rx_after: received signal after matched filter
+    sps: samples per symbol
+    snr: SNR value in dB
+    detected_delay: detected preamble position in samples
+    preamble_length: length of preamble in symbols (to skip entire preamble)
+    """
+    fig, axes = plt.subplots(2, 2, figsize=(15, 10))
 
     # Create a time vector normalized to the symbol period (-1 to +1)
-    # This centers the "eye" opening exactly at time 0.
     t_norm = np.linspace(-1, 1, 2 * sps)
 
-    # Plot "Before" Eye Diagram
-    # Starting at i=20 is good practice to skip initial filter transients
-    for i in range(20, 60):
-        segment = rx_before[i * sps: (i + 2) * sps]
-        ax1.plot(t_norm, segment, 'r', alpha=0.2)
+    # Determine start position: skip to message region (after preamble)
+    preamble_samples = preamble_length * sps
+    start_idx = detected_delay + preamble_samples
+    
+    # Add offset to skip first 5 symbols of message for transient settling
+    start_idx = start_idx + 5 * sps
+    end_idx = start_idx + 40 * sps  # Plot 40 symbols worth
+    
+    # Ensure we don't go past signal length
+    end_idx = min(end_idx, len(rx_before) - 2*sps, len(rx_after) - 2*sps)
+    
+    if end_idx <= start_idx:
+        print(f"Warning: Not enough samples for eye diagram (SNR={snr} dB, start={start_idx}, end={end_idx})")
+        return
+    
+    print(f"Eye diagram SNR={snr} dB: plotting from sample {start_idx} to {end_idx}")
 
-    ax1.set_title(f'Eye Diagram BEFORE Matched Filter (RRC Only), SNR={snr}')
-    ax1.set_xlabel('Time (Normalized to Symbol Period T)')
-    ax1.set_ylabel('Amplitude')
-    ax1.grid(True)
+    # Plot "Before" - Real part (In-phase)
+    for i in range(start_idx, end_idx, sps):  # Step by sps for overlapping windows
+        segment = rx_before[i: i + 2 * sps]
+        if len(segment) == 2 * sps:
+            axes[0, 0].plot(t_norm, np.real(segment), 'r', alpha=0.2)
+    axes[0, 0].set_title(f'Eye Diagram BEFORE - Real Part, Eb/N0={snr} dB')
+    axes[0, 0].set_xlabel('Time (Normalized to Symbol Period)')
+    axes[0, 0].set_ylabel('Real (I) Amplitude')
+    axes[0, 0].grid(True)
 
-    # Plot "After" Eye Diagram
-    for i in range(20, 60):
-        segment = rx_after[i * sps: (i + 2) * sps]
-        ax2.plot(t_norm, segment, 'b', alpha=0.2)
+    # Plot "Before" - Imaginary part (Quadrature)
+    for i in range(start_idx, end_idx, sps):
+        segment = rx_before[i: i + 2 * sps]
+        if len(segment) == 2 * sps:
+            axes[0, 1].plot(t_norm, np.imag(segment), 'r', alpha=0.2)
+    axes[0, 1].set_title(f'Eye Diagram BEFORE - Imaginary Part, Eb/N0={snr} dB')
+    axes[0, 1].set_xlabel('Time (Normalized to Symbol Period)')
+    axes[0, 1].set_ylabel('Imaginary (Q) Amplitude')
+    axes[0, 1].grid(True)
 
-    ax2.set_title(f'Eye Diagram AFTER Matched Filter (Combined RC), SNR={snr}')
-    ax2.set_xlabel('Time (Normalized to Symbol Period T)')
-    ax2.set_ylabel('Amplitude')
-    ax2.grid(True)
+    # Plot "After" - Real part
+    for i in range(start_idx, end_idx, sps):
+        segment = rx_after[i: i + 2 * sps]
+        if len(segment) == 2 * sps:
+            axes[1, 0].plot(t_norm, np.real(segment), 'b', alpha=0.2)
+    axes[1, 0].set_title(f'Eye Diagram AFTER (Matched Filter) - Real Part, Eb/N0={snr} dB')
+    axes[1, 0].set_xlabel('Time (Normalized to Symbol Period)')
+    axes[1, 0].set_ylabel('Real (I) Amplitude')
+    axes[1, 0].grid(True)
+
+    # Plot "After" - Imaginary part
+    for i in range(start_idx, end_idx, sps):
+        segment = rx_after[i: i + 2 * sps]
+        if len(segment) == 2 * sps:
+            axes[1, 1].plot(t_norm, np.imag(segment), 'b', alpha=0.2)
+    axes[1, 1].set_title(f'Eye Diagram AFTER (Matched Filter) - Imaginary Part, Eb/N0={snr} dB')
+    axes[1, 1].set_xlabel('Time (Normalized to Symbol Period)')
+    axes[1, 1].set_ylabel('Imaginary (Q) Amplitude')
+    axes[1, 1].grid(True)
 
     plt.tight_layout()
     plt.show()
@@ -73,12 +118,11 @@ def plot_ber_comparison(ebno_db_range, simulated_ber, series_labels=None):
                    Can be a 1D array for a single curve or a 2D array for multiple curves.
     series_labels: Optional list of labels for each simulated BER curve.
     """
-    # 1. Calculate Theoretical BER for BPSK
+    # 1. Calculate Theoretical BER for QPSK
     # Convert Eb/N0 from dB to linear
     ebno_linear = 10 ** (ebno_db_range / 10)
 
-    # The Q-function Q(x) can be calculated using the complementary
-    # error function: Q(x) = 0.5 * erfc(x / sqrt(2))
+    # QPSK has same BER as BPSK (for the same Eb/N0)
     # Pb = Q(sqrt(2 * Eb/N0)) -> 0.5 * erfc(sqrt(Eb/N0))
     theoretical_ber = 0.5 * erfc(np.sqrt(ebno_linear))
 
@@ -86,14 +130,14 @@ def plot_ber_comparison(ebno_db_range, simulated_ber, series_labels=None):
     plt.figure(figsize=(8, 6))
 
     # Use a semi-log scale (y-axis is logarithmic)
-    plt.semilogy(ebno_db_range, theoretical_ber, 'b-', label='Theoretical BPSK', linewidth=2)
+    plt.semilogy(ebno_db_range, theoretical_ber, 'b-', label='Theoretical QPSK', linewidth=2)
 
     simulated_ber_array = np.array(simulated_ber)
     if simulated_ber_array.ndim == 1:
         ber_curve_arr = np.array(simulated_ber_array, dtype=float)
         valid = ber_curve_arr > 0
         if np.any(valid):
-            plt.semilogy(np.array(ebno_db_range)[valid], ber_curve_arr[valid], 'ro', label='Simulated RRC Matched Filter')
+            plt.semilogy(np.array(ebno_db_range)[valid], ber_curve_arr[valid], 'ro', label='Simulated QPSK RRC Matched Filter')
     else:
         for idx, ber_curve in enumerate(simulated_ber_array):
             label = series_labels[idx] if series_labels is not None else f"Simulated Curve {idx + 1}"
