@@ -2,11 +2,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.special import erfc
 
-
-SNR = [0, 5, 10, 15]  # Values in dB
-
-
-def plot_BER_vs_SNR(ber_plot_values, series_labels=None):
+def plot_BER_vs_SNR(ber_plot_values, series_labels=None, snr_range=None):
+    if snr_range is None:
+        snr_range = [0, 5, 10, 15]
     plt.figure(figsize=(8, 6))
 
     # Use semilogy for the logarithmic Y-axis
@@ -17,32 +15,24 @@ def plot_BER_vs_SNR(ber_plot_values, series_labels=None):
             valid = ber_curve_arr > 0
             if not np.any(valid):
                 continue
-            plt.semilogy(np.array(SNR)[valid], ber_curve_arr[valid], marker='o', linewidth=2, markersize=8, label=label)
+            plt.semilogy(np.array(snr_range)[valid], ber_curve_arr[valid], marker='o', linewidth=2, markersize=8, label=label)
         plt.legend()
     else:
         ber_curve_arr = np.array(ber_plot_values, dtype=float)
         valid = ber_curve_arr > 0
         if np.any(valid):
-            plt.semilogy(np.array(SNR)[valid], ber_curve_arr[valid], 'b-o', linewidth=2, markersize=8)
+            plt.semilogy(np.array(snr_range)[valid], ber_curve_arr[valid], 'b-o', linewidth=2, markersize=8)
 
     plt.title('QPSK Bit Error Rate (BER) vs. Eb/N0')
     plt.xlabel('Eb/N0 (dB)')
     plt.ylabel('Bit Error Rate (BER)')
     plt.grid(True, which='both', linestyle='--', alpha=0.7)
-
     plt.show()
 
 
 def plot_eye_diagram(rx_before, rx_after, sps, snr, detected_delay=0, preamble_length=0):
     """
     Plot eye diagram for QPSK signals (handles complex signals).
-    
-    rx_before: received signal before matched filter
-    rx_after: received signal after matched filter
-    sps: samples per symbol
-    snr: SNR value in dB
-    detected_delay: detected preamble position in samples
-    preamble_length: length of preamble in symbols (to skip entire preamble)
     """
     fig, axes = plt.subplots(2, 2, figsize=(15, 10))
 
@@ -112,113 +102,96 @@ def plot_eye_diagram(rx_before, rx_after, sps, snr, detected_delay=0, preamble_l
 
 def plot_ber_comparison(ebno_db_range, simulated_ber, series_labels=None):
     """
-    Plots simulated BER vs Theoretical BPSK BER.
-    ebno_db_range: Array of Eb/N0 values in dB (e.g., np.arange(0, 11))
-    simulated_ber: Array of BER values calculated from your simulation.
-                   Can be a 1D array for a single curve or a 2D array for multiple curves.
-    series_labels: Optional list of labels for each simulated BER curve.
+    Plots simulated BER vs Theoretical QPSK BER.
     """
-    # 1. Calculate Theoretical BER for QPSK
-    # Convert Eb/N0 from dB to linear
-    ebno_linear = 10 ** (ebno_db_range / 10)
-
-    # QPSK has same BER as BPSK (for the same Eb/N0)
-    # Pb = Q(sqrt(2 * Eb/N0)) -> 0.5 * erfc(sqrt(Eb/N0))
+    ebno_linear = 10 ** (np.array(ebno_db_range) / 10)
     theoretical_ber = 0.5 * erfc(np.sqrt(ebno_linear))
 
-    # 2. Plotting
-    plt.figure(figsize=(8, 6))
-
-    # Use a semi-log scale (y-axis is logarithmic)
-    plt.semilogy(ebno_db_range, theoretical_ber, 'b-', label='Theoretical QPSK', linewidth=2)
+    plt.figure(figsize=(9, 6))
+    plt.semilogy(ebno_db_range, theoretical_ber, 'k-', label='Theoretical QPSK Baseline', linewidth=2.5)
 
     simulated_ber_array = np.array(simulated_ber)
+    markers = ['o', 's', '^', 'x', 'd']
+    
     if simulated_ber_array.ndim == 1:
         ber_curve_arr = np.array(simulated_ber_array, dtype=float)
         valid = ber_curve_arr > 0
         if np.any(valid):
-            plt.semilogy(np.array(ebno_db_range)[valid], ber_curve_arr[valid], 'ro', label='Simulated QPSK RRC Matched Filter')
+            plt.semilogy(np.array(ebno_db_range)[valid], ber_curve_arr[valid], 'ro', label='Simulated Receiver Performance')
     else:
         for idx, ber_curve in enumerate(simulated_ber_array):
             label = series_labels[idx] if series_labels is not None else f"Simulated Curve {idx + 1}"
             ber_curve_arr = np.array(ber_curve, dtype=float)
-            valid = ber_curve_arr > 0
-            if not np.any(valid):
-                continue
-            plt.semilogy(np.array(ebno_db_range)[valid], ber_curve_arr[valid], marker='o', linewidth=2, markersize=6, label=label)
+            
+            # Use clipping to handle exact 0.0 BER values gracefully on a log plot
+            clean_ber = np.clip(ber_curve_arr, 1e-6, 1.0)
+            plt.semilogy(ebno_db_range, clean_ber, marker=markers[idx % len(markers)], 
+                         linewidth=1.8, markersize=6, label=label)
 
-    plt.title('BER Performance: Simulated vs. Theoretical')
-    plt.xlabel('$E_b/N_0$ (dB)')
-    plt.ylabel('Bit Error Rate (BER)')
-    plt.grid(True, which='both')
-    plt.legend()
+    plt.title('BER Performance Evaluation: Simulated vs. Theoretical Bounds', fontsize=12, fontweight='bold')
+    plt.xlabel('$E_b/N_0$ (dB)', fontsize=11)
+    plt.ylabel('Bit Error Rate (BER)', fontsize=11)
+    plt.grid(True, which='both', linestyle=':', alpha=0.6)
+    plt.legend(loc='lower left', fontsize=10)
+    plt.tight_layout()
     plt.show()
 
 
 def plot_noisy_signal(clean_signal, noisy_signal, sps, snr, num_symbols_to_show=10):
-    """
-    Plots the filtered signal before and after noise.
-
-    clean_signal: The RRC filtered signal (no noise)
-    noisy_signal: The signal after add_awgn()
-    sps: Samples per symbol
-    num_symbols_to_show: Number of symbol periods to display on the x-axis
-    """
-    # Calculate how many samples to plot based on symbols
     num_samples = min(len(clean_signal), num_symbols_to_show * sps)
-
-    # Create a time axis in terms of symbol periods
     time_axis = np.arange(num_samples) / sps
 
     plt.figure(figsize=(12, 5))
+    plt.plot(time_axis, np.real(noisy_signal[:num_samples]), color='silver', label='Noisy Signal (I)', alpha=0.7)
+    plt.plot(time_axis, np.real(clean_signal[:num_samples]), color='#1f77b4', linewidth=2, label='Clean RRC Signal (I)')
 
-    # Plot noisy signal in the background
-    plt.plot(time_axis, noisy_signal[:num_samples], color='silver',
-             label='Noisy Signal', alpha=0.7)
-
-    # Plot clean signal in the foreground
-    plt.plot(time_axis, clean_signal[:num_samples], color='#1f77b4',
-             linewidth=2, label='Clean RRC Signal')
-
-    plt.title(f'Time Domain Signal, SNR value: {snr} dB (First {num_symbols_to_show} Symbols)')
+    plt.title(f'Time Domain Signal Waveform (Eb/N0: {snr} dB)', fontsize=12)
     plt.xlabel('Symbol Periods (T)')
     plt.ylabel('Amplitude')
     plt.grid(True, which='both', linestyle='--', alpha=0.5)
     plt.legend(loc='upper right')
-
-    # Highlight symbol sampling points (the centers)
-    # Note: Depending on your filter delay/span, you may need an offset here
+    plt.tight_layout()
     plt.show()
 
 
 def plot_sent_vs_sampled(sent_bits, sampled_output):
-    """
-    Plots the original bits vs the recovered symbols.
-
-    sent_bits: The original sequence of 1s and -1s.
-    sampled_output: The output from your sample_receiver() function.
-    """
-    # Ensure both arrays are the same length for comparison
-    # The receiver might have fewer samples due to filter truncation
     num_samples = min(len(sent_bits), len(sampled_output))
-
     indices = np.arange(num_samples)
 
     plt.figure(figsize=(12, 6))
-
-    # Plot Sent Bits (Digital level)
-    plt.step(indices, sent_bits[:num_samples], where='mid',
-             label='Sent Bits (Input)', color='gray', linestyle='--', alpha=0.6)
-
-    # Plot Sampled Symbols (Analog level at sampling instance)
-    plt.stem(indices, sampled_output[:num_samples],
-             linefmt='C0-', markerfmt='C0o', label='Sampled Output (Rx)',
-             basefmt=" ")
+    plt.step(indices, sent_bits[:num_samples], where='mid', label='Sent Bits (Input)', color='gray', linestyle='--', alpha=0.6)
+    plt.stem(indices, sampled_output[:num_samples], linefmt='C0-', markerfmt='C0o', label='Sampled Output (Rx)', basefmt=" ")
 
     plt.axhline(0, color='black', linewidth=0.8)
-    plt.title(f'Sent Bits vs. Sampled Matched Filter Output (Alignment Check)')
+    plt.title('Sent Bits vs. Sampled Matched Filter Output (Alignment Check)')
     plt.xlabel('Symbol Index')
     plt.ylabel('Amplitude')
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.show()
+
+
+def plot_delay_tracking(snr_range, delay_matrix, labels, true_delay):
+    """
+    Plots tracked sample delays for each method against SNR 
+    and overlays a horizontal baseline reference of the true delay.
+    """
+    plt.figure(figsize=(9, 6))
+    markers = ['o', 's', '^', 'x', 'd']
+    
+    plt.axhline(y=true_delay, color='black', linestyle='--', linewidth=2, 
+                label=f'True Physical Delay ({true_delay:.2f} samples)')
+    
+    for i in range(delay_matrix.shape[0]):
+        plt.plot(snr_range, delay_matrix[i], marker=markers[i % len(markers)],
+                 linestyle='-', alpha=0.8, linewidth=1.5, label=labels[i])
+        
+    plt.title(f"Timing Synchronization/Delay Estimation vs. SNR", fontsize=12, fontweight='bold')
+    plt.xlabel("$E_b/N_0$ (dB)", fontsize=11)
+    plt.ylabel("Estimated Delay Position (Samples)", fontsize=11)
+    plt.grid(True, which="both", linestyle=":", alpha=0.6)
+    plt.legend(loc="best", fontsize=10)
+    plt.tight_layout()
+    plt.show()
+
+
