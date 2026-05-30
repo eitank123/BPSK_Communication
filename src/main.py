@@ -111,8 +111,8 @@ if __name__ == "__main__":
     
     # Define the SPS values to sweep for Graphs 5 and 7
     sps_sweep_values = [4, 8, 16, 32, 64]
-    range_error_vs_sps_final = {1: [], 2: [], 3: [], 4: [], 5: []}
-    ber_vs_sps_final = {1: [], 2: [], 3: [], 4: [], 5: []}
+    range_error_vs_sps_final = {1: [], 2: [], 3: [], 4: [], 5: [], 6: []}
+    ber_vs_sps_final = {1: [], 2: [], 3: [], 4: [], 5: [], 6: []}
 
     # =========================================================================
     # SWEEP 1: Varying SNR (Fixed SPS) - Graphs 1, 2, 3, 4, 6
@@ -126,8 +126,8 @@ if __name__ == "__main__":
 
             clean_signal, Rx_signals = create_transmitted_signal(sender, preamble, delay, FREQ_OFFSET, sps)
             
-            ber_results = {1: [], 2: [], 3: [], 4: [], 5: []}
-            delay_results = {1: [], 2: [], 3: [], 4: [], 5: []}
+            ber_results = {1: [], 2: [], 3: [], 4: [], 5: [], 6: []}
+            delay_results = {1: [], 2: [], 3: [], 4: [], 5: [], 6: []}
             
             for snr_idx, rx_sig in enumerate(Rx_signals):
                 current_snr = SNR[snr_idx]
@@ -180,25 +180,33 @@ if __name__ == "__main__":
                 ber_results[5].append(get_BER(original_bits_flat, symbols_to_bits(symbols_m5)))
                 delay_results[5].append(to_scalar(coarse_delay + final_phase_m5))
 
+                # --- APPROACH 6: LMS Adaptive Timing Recovery ---
+                symbols_m6, final_phase_m6 = receiver.lms_adaptive_timing_recovery(
+                    filt_signal, start_idx=payload_start_idx, sps=sps, max_symbols=num_data_symbols
+                )
+                ber_results[6].append(get_BER(original_bits_flat, symbols_to_bits(symbols_m6)))
+                delay_results[6].append(to_scalar(coarse_delay + final_phase_m6))
+
                 if current_snr == 10:
                     plots.plot_eye_diagram(rx_sig, filt_signal, sps, current_snr, coarse_delay, preamble_length)
 
             # Print console layout summary comparison
             print(f"\nSummary of BER results (%) for Corrected Delay = {delay}:")
-            print(f"{'SNR (dB)':<10}{'Method 1':<12}{'Method 2':<12}{'Method 3':<12}{'Method 4':<12}{'Method 5':<12}")
-            print("-" * 70)
+            print(f"{'SNR (dB)':<10}{'Method 1':<12}{'Method 2':<12}{'Method 3':<12}{'Method 4':<12}{'Method 5':<12}{'Method 6':<12}")
+            print("-" * 82)
             for i, snr_val in enumerate(SNR):
                 print(f"{snr_val:<10}"
                       f"{ber_results[1][i]*100:<12.2f}"
                       f"{ber_results[2][i]*100:<12.2f}"
                       f"{ber_results[3][i]*100:<12.2f}"
                       f"{ber_results[4][i]*100:<12.2f}"
-                      f"{ber_results[5][i]*100:<12.2f}")
+                      f"{ber_results[5][i]*100:<12.2f}"
+                      f"{ber_results[6][i]*100:<12.2f}")
             
             # Map tracking datasets over to plotting modules (Legacy Plots)
-            matrix_ber = np.array([ber_results[1], ber_results[2], ber_results[3], ber_results[4], ber_results[5]])
-            matrix_delay = np.array([delay_results[1], delay_results[2], delay_results[3], delay_results[4], delay_results[5]])
-            labels = ["Integer Correlation (M1)", "Parabolic Interp (M2)", "ML Grid Search (M3)", "Early-Late Loop (M4)", "Gardner Loop (M5)"]
+            matrix_ber = np.array([ber_results[1], ber_results[2], ber_results[3], ber_results[4], ber_results[5], ber_results[6]])
+            matrix_delay = np.array([delay_results[1], delay_results[2], delay_results[3], delay_results[4], delay_results[5], delay_results[6]])
+            labels = ["Integer Correlation (M1)", "Parabolic Interp (M2)", "ML Grid Search (M3)", "Early-Late Loop (M4)", "Gardner Loop (M5)", "LMS Adaptive (M6)"]
             
             # Fire legacy performance analytical plot interfaces
             plots.plot_ber_comparison(SNR, matrix_ber, labels)
@@ -282,6 +290,13 @@ if __name__ == "__main__":
         ber_vs_sps_final[5].append(get_BER(original_bits_flat, symbols_to_bits(sym_m5)))
         range_error_vs_sps_final[5].append((to_scalar(c_delay + f_phase_m5) - target_delay) * (c / current_fs))
 
+        # M6
+        sym_m6, f_phase_m6 = receiver.lms_adaptive_timing_recovery(
+            filt_signal, start_idx=p_start, sps=test_sps, max_symbols=num_data_symbols
+        )
+        ber_vs_sps_final[6].append(get_BER(original_bits_flat, symbols_to_bits(sym_m6)))
+        range_error_vs_sps_final[6].append((to_scalar(c_delay + f_phase_m6) - target_delay) * (c / current_fs))
+
     # =========================================================================
     # RENDER NEW ASSIGNMENT PLOTS (Graphs 4, 5, 7)
     # =========================================================================
@@ -291,7 +306,8 @@ if __name__ == "__main__":
         2: {'label': 'Parabolic Interp (M2)',       'color': '#ff7f0e', 'marker': 's', 'ls': '-'},
         3: {'label': 'ML Grid Search (M3)',          'color': '#2ca02c', 'marker': '^', 'ls': '-'},
         4: {'label': 'Early-Late Loop (M4)',        'color': '#d62728', 'marker': 'x', 'ls': '-'},
-        5: {'label': 'Gardner Loop (M5)',           'color': '#9467bd', 'marker': 'd', 'ls': '-'}
+        5: {'label': 'Gardner Loop (M5)',           'color': '#9467bd', 'marker': 'd', 'ls': '-'},
+        6: {'label': 'LMS Adaptive (M6)',    'color': '#8c564b', 'marker': 'v', 'ls': '-'}
     }
 
     # Graph 4: Range Error vs SNR

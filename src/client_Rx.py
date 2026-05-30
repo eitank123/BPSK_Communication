@@ -2,6 +2,7 @@ import numpy as np
 from scipy import signal
 from scipy.interpolate import interp1d
 
+
 class Client_Rx:
     def __init__(self, signal_list, is_qpsk=False):
         self.signal = signal_list
@@ -185,3 +186,73 @@ class Client_Rx:
         if len(recovered_symbols) == 0:
             return np.zeros(max_symbols, dtype=complex), 0.0
         return np.array(recovered_symbols), timing_phase  # CHANGED: Return the actual scalar phase
+    
+
+
+    def lms_adaptive_timing_recovery(self, filt_signal, start_idx, sps, max_symbols):
+        """
+        Recovers timing synchronization using a Low-Complexity LMS Adaptive Filter
+        driven by a Gardner Timing Error Detector (TED).
+        """
+        recovered_symbols = []
+        
+        # --- OPTIMIZATION: Create the interpolator ONCE outside the loop ---
+        t = np.arange(len(filt_signal))
+        if np.iscomplexobj(filt_signal):
+            interp_real = interp1d(t, np.real(filt_signal), kind='cubic', bounds_error=False, fill_value=0.0)
+            interp_imag = interp1d(t, np.imag(filt_signal), kind='cubic', bounds_error=False, fill_value=0.0)
+            interp_func = lambda pts: interp_real(pts) + 1j * interp_imag(pts)
+        else:
+            interp_func = interp1d(t, filt_signal, kind='cubic', bounds_error=False, fill_value=0.0)
+        
+        # LMS Hyperparameters
+        mu_phase = 0.01  
+        mu_drift = 0.0001 
+        
+        # Initialize adaptive parameters (scalars)
+        phase_offset = 0.0
+        clock_drift = 0.0
+        
+        current_idx = float(start_idx)
+        
+        for _ in range(max_symbols):
+            # Apply the current adaptive timing correction
+            eval_idx = current_idx + phase_offset
+            
+            # Guard rails for signal boundaries
+            if eval_idx + sps >= len(filt_signal) or eval_idx - sps < 0:
+                break
+                
+            t_curr = eval_idx
+            t_mid  = eval_idx - (sps / 2.0)
+            t_prev = eval_idx - sps
+            
+            # Evaluate the pre-computed interpolator
+            y_curr = interp_func([t_curr])[0]
+            y_mid  = interp_func([t_mid])[0]
+            y_prev = interp_func([t_prev])[0]
+            
+            recovered_symbols.append(y_curr)
+            
+            # Calculate the raw Gardner TED error
+            raw_error = np.real((y_curr - y_prev) * np.conj(y_mid))
+            
+            # Normalize to a "Bang-Bang" error (+1, -1, or 0)
+            ted_error = np.sign(raw_error)
+            
+            # FIX 1: Align the integrator (clock_drift) sign (+ instead of -) 
+            # so it works WITH the proportional term, not against it.
+            clock_drift += (mu_drift * ted_error)
+            
+            # FIX 2: Group the PI terms so negative feedback pulls them both correctly
+            phase_offset -= (mu_phase * ted_error + clock_drift)
+            
+            # FIX 3: Bound the phase offset. This prevents the Bang-Bang logic 
+            # from jumping entire symbols during initial transients.
+            phase_offset = np.clip(phase_offset, -sps, sps)
+            
+            # Move the base index forward by a nominal symbol period
+            current_idx += sps
+
+        final_phase_offset = phase_offset
+        return np.array(recovered_symbols), final_phase_offset
