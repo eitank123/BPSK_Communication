@@ -7,8 +7,8 @@ import plots  # Imports your updated plotting code package
 
 np.random.seed(42)
 number_of_bits = 10000
-sps = 8
-betas = [0.25]
+sps = 2
+betas = [0.5]
 delays = [200.4]  # Testing fractional delay positioning
 filter_span = 10
 
@@ -110,7 +110,7 @@ if __name__ == "__main__":
     range_error_vs_snr_final = {1: [], 2: [], 3: [], 4: [], 5: []}
     
     # Define the SPS values to sweep for Graphs 5 and 7
-    sps_sweep_values = [4, 8, 16, 32, 64]
+    sps_sweep_values = [1, 2, 4, 8, 16]
     range_error_vs_sps_final = {1: [], 2: [], 3: [], 4: [], 5: [], 6: []}
     ber_vs_sps_final = {1: [], 2: [], 3: [], 4: [], 5: [], 6: []}
 
@@ -219,13 +219,13 @@ if __name__ == "__main__":
                 range_error_vs_snr_final[m_id] = errors
 
     # =========================================================================
-    # SWEEP 2: Varying SPS (Fixed SNR = 6 dB) - Graphs 5 and 7
+    # SWEEP 2: Varying SPS (Fixed SNR = 8 dB) - Graphs 5 and 7
     # =========================================================================
     print(f"\n=======================================================")
-    print(f"Phase 2: Simulating SPS Sweep (SNR=6 dB, Beta={betas[0]}, Delay={delays[0]})")
+    print(f"Phase 2: Simulating SPS Sweep (SNR=8 dB, Beta={betas[0]}, Delay={delays[0]})")
     print(f"=======================================================")
     
-    target_snr_sps_sweep = 6
+    target_snr_sps_sweep = 8
     target_delay = delays[0]
     target_beta = betas[0]
     
@@ -313,7 +313,7 @@ if __name__ == "__main__":
     # Graph 4: Range Error vs SNR
     plt.figure(figsize=(12, 6))
     for m_id, style in method_styles.items():
-        plt.plot(SNR, range_error_vs_snr_final[m_id], color=style['color'], marker=style['marker'], 
+        plt.plot(SNR, np.abs(range_error_vs_snr_final[m_id]), color=style['color'], marker=style['marker'], 
                  linestyle=style['ls'], label=style['label'])
     plt.title(f'Graph 4: Range Error vs. SNR (SPS = {sps})')
     plt.xlabel('E_b/N_0 (dB)')
