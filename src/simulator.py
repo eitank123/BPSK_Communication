@@ -1,0 +1,416 @@
+"""
+Simulation orchestrator module.
+
+Coordinates the overall simulation flow, managing sweeps and method comparisons.
+Keeps main logic clean and readable by abstracting away sweep complexity.
+"""
+
+import numpy as np
+from client_Tx import Client_Tx
+from client_Rx import Client_Rx
+from channel import (
+    generate_zadoff_chu_preamble,
+    add_cyclic_prefix,
+    add_rician_fading,
+    create_formatted_payload,
+    upsample_symbols
+)
+from utilities import calculate_ber, to_scalar, symbols_to_bits
+from signal_processing import downsample_to_symbol_rate
+import config as cfg
+from signal_processing import cubic_interpolate
+
+
+class SimulationEngine:
+    """
+    Main simulation engine coordinating transmitter, receiver, and channel.
+    """
+    
+    def __init__(self):
+        self.sender = None
+        self.preamble = None
+        self.original_bits_flat = None
+        self.num_data_symbols = None
+        
+    def initialize_transmitter(self):
+        """Initialize transmitter and bit stream."""
+        self.sender = Client_Tx(
+            cfg.NUMBER_OF_BITS,
+            cfg.BIT_MAPPING_QPSK,
+            is_qpsk=True,
+            farrow_degree=cfg.FARROW_INTERPOLATION_DEGREE
+        )
+        self.sender.generate_bit_array()
+        
+        # Store original bits for BER calculation
+        self.original_bits_flat = np.array(
+            [bit for tuple_bits in self.sender.bit_array for bit in tuple_bits]
+        )
+        self.num_data_symbols = len(self.sender.mapped_bits)
+    
+    def initialize_preamble(self):
+        """Generate Zadoff-Chu preamble."""
+        self.preamble = generate_zadoff_chu_preamble(
+            cfg.PREAMBLE_LENGTH,
+            cfg.PREAMBLE_ROOT_INDEX
+        )
+    
+    def create_transmitted_signal(self, sender, preamble, delay, freq_offset, sps):
+        """
+        Create transmitted signal with preamble and payload.
+        
+        Applies RRC filtering, cyclic prefix insertion, and channel distortion.
+        
+        Parameters
+        ----------
+        sender : Client_Tx
+            Transmitter object
+        preamble : ndarray
+            Preamble symbols
+        delay : float
+            Transmission delay in samples
+        freq_offset : float
+            Frequency offset in Hz
+        sps : int
+            Samples per symbol
+        
+        Returns
+        -------
+        tuple
+            (clean_signal, rx_signals_per_k_factor)
+        """
+        # ====================================================================
+        # STEP 1: Format payload with cyclic prefixes
+        # ====================================================================
+        data_symbols = sender.mapped_bits
+        formatted_data = create_formatted_payload(
+            data_symbols,
+            cfg.DATA_BLOCK_SIZE,
+            cfg.CP_LENGTH
+        )
+        
+        # Combine preamble with payload
+        full_symbols = np.concatenate([preamble, formatted_data])
+        
+        # ====================================================================
+        # STEP 2: Upsample and apply RRC filtering
+        # ====================================================================
+        upsampled_full = upsample_symbols(full_symbols, sps, is_complex=True)
+        x_t = sender.prepare_x_t(upsampled_full, delay, freq_offset, sample_rate=sps)
+        
+        # ====================================================================
+        # STEP 3: Apply channel (Rician fading + AWGN for each K-factor)
+        # ====================================================================
+        rx_signals = []
+        for k_db in cfg.RICIAN_K_FACTORS:
+            rx_signal = add_rician_fading(
+                np.array(x_t),
+                k_db,
+                cfg.TARGET_SNR,
+                sps
+            )
+            rx_signals.append(rx_signal)
+        
+        return x_t, rx_signals
+    
+    def process_received_signal(self, rx_signal, method_id, receiver,
+                                preamble, sps, coarse_delay=None):
+        """
+        Process received signal through selected recovery method.
+        
+        Parameters
+        ----------
+        rx_signal : ndarray
+            Received signal
+        method_id : int
+            Timing recovery method ID (1-6)
+        receiver : Client_Rx
+            Receiver object
+        preamble : ndarray
+            Reference preamble
+        sps : int
+            Samples per symbol
+        coarse_delay : float, optional
+            Coarse delay estimate for methods 4-6
+        
+        Returns
+        -------
+        tuple
+            (equalized_symbols, estimated_delay)
+        """
+        filt_signal = receiver.filtered_signal[0]
+        
+        if method_id == 1:
+            return self._process_method1(
+                filt_signal, receiver, preamble, sps
+            )
+        elif method_id == 2:
+            return self._process_method2(
+                filt_signal, receiver, preamble, sps
+            )
+        elif method_id == 3:
+            return self._process_method3(
+                filt_signal, receiver, preamble, sps
+            )
+        elif method_id == 4:
+            return self._process_method4(
+                filt_signal, receiver, preamble, sps, coarse_delay
+            )
+        elif method_id == 5:
+            return self._process_method5(
+                filt_signal, receiver, preamble, sps, coarse_delay
+            )
+        elif method_id == 6:
+            return self._process_method6(
+                filt_signal, receiver, preamble, sps, coarse_delay
+            )
+        else:
+            raise ValueError(f"Unknown method_id: {method_id}")
+    
+    def _process_method1(self, filt_signal, receiver, preamble, sps):
+        """Method 1: Integer Correlation."""
+        detected_delays = receiver.detect_preamble(preamble, sps, cfg.FILTER_SPAN)
+        coarse_delay = int(round(detected_delays[0]))
+        
+        total_symbols = cfg.PREAMBLE_LENGTH + self.num_data_symbols
+        frame_samples = filt_signal[coarse_delay : coarse_delay + total_symbols * sps]
+        
+        equalized = receiver.equalize_sc_fde(
+            frame_samples, sps, preamble, cfg.TARGET_SNR,
+            cfg.DATA_BLOCK_SIZE, cfg.CP_LENGTH
+        )
+        
+        return equalized, to_scalar(coarse_delay)
+    
+    def _process_method2(self, filt_signal, receiver, preamble, sps):
+        """Method 2: Parabolic Fractional Interpolation."""
+        est_delay, _, _ = receiver.estimate_fractional_delay(
+            filt_signal, preamble, sps, cfg.FILTER_SPAN
+        )
+        
+        total_symbols = cfg.PREAMBLE_LENGTH + self.num_data_symbols
+        t_samples = est_delay + np.arange(total_symbols * sps)
+        frame_samples = cubic_interpolate(filt_signal, t_samples)
+        
+        equalized = receiver.equalize_sc_fde(
+            frame_samples, sps, preamble, cfg.TARGET_SNR,
+            cfg.DATA_BLOCK_SIZE, cfg.CP_LENGTH
+        )
+        
+        return equalized, to_scalar(est_delay)
+    
+    def _process_method3(self, filt_signal, receiver, preamble, sps):
+        """Method 3: Maximum Likelihood Grid Search."""
+        est_delay, _, _ = receiver.ml_fractional_delay(
+            filt_signal, preamble, sps, cfg.FILTER_SPAN,
+            grid_resolution=cfg.ML_GRID_RESOLUTION
+        )
+        
+        total_symbols = cfg.PREAMBLE_LENGTH + self.num_data_symbols
+        t_samples = est_delay + np.arange(total_symbols * sps)
+        frame_samples = cubic_interpolate(filt_signal, t_samples)
+        
+        equalized = receiver.equalize_sc_fde(
+            frame_samples, sps, preamble, cfg.TARGET_SNR,
+            cfg.DATA_BLOCK_SIZE, cfg.CP_LENGTH
+        )
+        
+        return equalized, to_scalar(est_delay)
+    
+    def _process_method4(self, filt_signal, receiver, preamble, sps, coarse_delay):
+        """Method 4: Early-Late Loop Tracking."""
+        detected_delays = receiver.detect_preamble(preamble, sps, cfg.FILTER_SPAN)
+        coarse_delay = int(round(detected_delays[0]))
+        payload_start = coarse_delay + (cfg.PREAMBLE_LENGTH * sps)
+        
+        num_blocks = int(np.ceil(self.num_data_symbols / cfg.DATA_BLOCK_SIZE))
+        total_payload = num_blocks * (cfg.DATA_BLOCK_SIZE + cfg.CP_LENGTH)
+        
+        symbols, final_phase = receiver.early_late_recovery(
+            filt_signal, start_idx=payload_start, sps=sps,
+            max_symbols=total_payload
+        )
+        
+        rx_preamble = filt_signal[coarse_delay : coarse_delay + cfg.PREAMBLE_LENGTH * sps : sps]
+        _, W_mmse = receiver.estimate_channel_and_weights(
+            rx_preamble, preamble, cfg.DATA_BLOCK_SIZE, cfg.TARGET_SNR
+        )
+        
+        equalized = receiver.equalize_blocks_only(
+            symbols, W_mmse, cfg.DATA_BLOCK_SIZE, cfg.CP_LENGTH
+        )
+        
+        return equalized, to_scalar(coarse_delay + final_phase)
+    
+    def _process_method5(self, filt_signal, receiver, preamble, sps, coarse_delay):
+        """Method 5: Gardner Loop Tracking."""
+        detected_delays = receiver.detect_preamble(preamble, sps, cfg.FILTER_SPAN)
+        coarse_delay = int(round(detected_delays[0]))
+        payload_start = coarse_delay + (cfg.PREAMBLE_LENGTH * sps)
+        
+        num_blocks = int(np.ceil(self.num_data_symbols / cfg.DATA_BLOCK_SIZE))
+        total_payload = num_blocks * (cfg.DATA_BLOCK_SIZE + cfg.CP_LENGTH)
+        
+        # Try Dynamic_Gardner_recovery first, fall back to Gardner_recovery
+        if hasattr(receiver, 'Dynamic_Gardner_recovery'):
+            symbols, final_phase = receiver.Dynamic_Gardner_recovery(
+                filt_signal, start_idx=payload_start, sps=sps,
+                max_symbols=total_payload
+            )
+        else:
+            symbols, final_phase = receiver.Gardner_recovery(
+                filt_signal, start_idx=payload_start, sps=sps,
+                max_symbols=total_payload
+            )
+        
+        rx_preamble = filt_signal[coarse_delay : coarse_delay + cfg.PREAMBLE_LENGTH * sps : sps]
+        _, W_mmse = receiver.estimate_channel_and_weights(
+            rx_preamble, preamble, cfg.DATA_BLOCK_SIZE, cfg.TARGET_SNR
+        )
+        
+        equalized = receiver.equalize_blocks_only(
+            symbols, W_mmse, cfg.DATA_BLOCK_SIZE, cfg.CP_LENGTH
+        )
+        
+        return equalized, to_scalar(coarse_delay + final_phase)
+    
+    def _process_method6(self, filt_signal, receiver, preamble, sps, coarse_delay):
+        """Method 6: LMS Adaptive Timing Recovery."""
+        detected_delays = receiver.detect_preamble(preamble, sps, cfg.FILTER_SPAN)
+        coarse_delay = int(round(detected_delays[0]))
+        payload_start = coarse_delay + (cfg.PREAMBLE_LENGTH * sps)
+        
+        num_blocks = int(np.ceil(self.num_data_symbols / cfg.DATA_BLOCK_SIZE))
+        total_payload = num_blocks * (cfg.DATA_BLOCK_SIZE + cfg.CP_LENGTH)
+        
+        symbols, final_phase = receiver.lms_adaptive_timing_recovery(
+            filt_signal, start_idx=payload_start, sps=sps,
+            max_symbols=total_payload
+        )
+        
+        rx_preamble = filt_signal[coarse_delay : coarse_delay + cfg.PREAMBLE_LENGTH * sps : sps]
+        _, W_mmse = receiver.estimate_channel_and_weights(
+            rx_preamble, preamble, cfg.DATA_BLOCK_SIZE, cfg.TARGET_SNR
+        )
+        
+        equalized = receiver.equalize_blocks_only(
+            symbols, W_mmse, cfg.DATA_BLOCK_SIZE, cfg.CP_LENGTH
+        )
+        
+        return equalized, to_scalar(coarse_delay + final_phase)
+    
+    def run_snr_sweep(self, beta, delay, sps):
+        """
+        Run SNR sweep test (varying Rician K-factor).
+        
+        Returns
+        -------
+        dict
+            Results dictionary with BER and delay for each method
+        """
+        print(f"\n{'='*60}")
+        print(f"SNR Sweep: Beta={beta}, Delay={delay}, SPS={sps}")
+        print(f"{'='*60}")
+        
+        # Prepare transmitter
+        self.sender.set_responses(beta, sps, cfg.FILTER_SPAN)
+        
+        # Generate signal
+        clean_signal, rx_signals = self.create_transmitted_signal(
+            self.sender, self.preamble, delay, cfg.FREQ_OFFSET, sps
+        )
+        
+        results = {
+            'ber': {i: [] for i in range(1, 7)},
+            'delay': {i: [] for i in range(1, 7)}
+        }
+        
+        # Process each received signal
+        for rx_sig in rx_signals:
+            receiver = Client_Rx([rx_sig], is_qpsk=True)
+            receiver.set_responses(beta, sps, cfg.FILTER_SPAN)
+            receiver.filter_signal(sps, cfg.FILTER_SPAN)
+            
+            # Process through all 6 methods
+            for method_id in range(1, 7):
+                try:
+                    equalized, est_delay = self.process_received_signal(
+                        rx_sig, method_id, receiver,
+                        self.preamble, sps
+                    )
+                    
+                    ber = calculate_ber(
+                        self.original_bits_flat,
+                        symbols_to_bits(equalized)
+                    )
+                    
+                    results['ber'][method_id].append(ber)
+                    results['delay'][method_id].append(est_delay)
+                    
+                except Exception as e:
+                    print(f"Error in method {method_id}: {e}")
+                    results['ber'][method_id].append(1.0)
+                    results['delay'][method_id].append(0.0)
+        
+        return results
+    
+    def run_sps_sweep(self, beta, delay, target_k_factor):
+        """
+        Run SPS sweep test (varying samples per symbol).
+        
+        Returns
+        -------
+        dict
+            Results dictionary with BER and delay for each SPS value
+        """
+        print(f"\n{'='*60}")
+        print(f"SPS Sweep: Beta={beta}, Delay={delay}, K={target_k_factor} dB")
+        print(f"{'='*60}")
+        
+        results = {
+            'ber': {i: [] for i in range(1, 7)},
+            'delay': {i: [] for i in range(1, 7)},
+            'sps_values': cfg.SPS_SWEEP_VALUES
+        }
+        
+        for test_sps in cfg.SPS_SWEEP_VALUES:
+            print(f"Testing SPS = {test_sps}...")
+            
+            # Update transmitter for this SPS
+            self.sender.set_responses(beta, test_sps, cfg.FILTER_SPAN)
+            
+            # Create signal
+            _, rx_signals = self.create_transmitted_signal(
+                self.sender, self.preamble, delay, cfg.FREQ_OFFSET, test_sps
+            )
+            
+            # Get signal for target K-factor
+            k_idx = cfg.RICIAN_K_FACTORS.index(target_k_factor)
+            rx_sig = rx_signals[k_idx]
+            
+            # Process through all methods
+            receiver = Client_Rx([rx_sig], is_qpsk=True)
+            receiver.set_responses(beta, test_sps, cfg.FILTER_SPAN)
+            receiver.filter_signal(test_sps, cfg.FILTER_SPAN)
+            
+            for method_id in range(1, 7):
+                try:
+                    equalized, est_delay = self.process_received_signal(
+                        rx_sig, method_id, receiver,
+                        self.preamble, test_sps
+                    )
+                    
+                    ber = calculate_ber(
+                        self.original_bits_flat,
+                        symbols_to_bits(equalized)
+                    )
+                    
+                    results['ber'][method_id].append(ber)
+                    results['delay'][method_id].append(est_delay)
+                    
+                except Exception as e:
+                    print(f"Error in method {method_id}: {e}")
+                    results['ber'][method_id].append(1.0)
+                    results['delay'][method_id].append(0.0)
+        
+        return results

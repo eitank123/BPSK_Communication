@@ -1,6 +1,19 @@
+"""
+QPSK Receiver - 6 timing synchronization methods + channel estimation/equalization.
+
+Methods:
+  1. Integer Correlation - Coarse integer delay
+  2. Parabolic Interpolation - Fractional delay via parabola fit
+  3. ML Grid Search - Maximum likelihood fractional estimation
+  4. Early-Late Loop - Tracking-based (PI control)
+  5. Gardner Loop - Classic timing recovery loop
+  6. LMS Adaptive - Adaptive filter-based tracking
+"""
+
 import numpy as np
 from scipy import signal
 from scipy.interpolate import interp1d
+from signal_processing import cubic_interpolate
 
 
 class Client_Rx:
@@ -27,23 +40,13 @@ class Client_Rx:
             self.filtered_signal.append(aligned_filtered)
 
     def generate_reference_preamble(self, preamble, sps):
+        """Generate expected preamble for correlation."""
         preamble_upsampled = np.zeros(len(preamble) * sps, dtype=complex)
         preamble_upsampled[::sps] = preamble
         reference = np.convolve(preamble_upsampled, self.impulse_response, mode='full')
         return reference
 
-    def cubic_interpolate(self, signal_in, sample_points):
-        """Helper for standalone vector interpolations (Approaches 2 and 3)"""
-        t = np.arange(len(signal_in))
-        if np.iscomplexobj(signal_in):
-            interp_real = interp1d(t, np.real(signal_in), kind='cubic', bounds_error=False, fill_value=0.0)
-            interp_imag = interp1d(t, np.imag(signal_in), kind='cubic', bounds_error=False, fill_value=0.0)
-            return interp_real(sample_points) + 1j * interp_imag(sample_points)
-        
-        interp_func = interp1d(t, signal_in, kind='cubic', bounds_error=False, fill_value=0.0)
-        return interp_func(sample_points)
-
-    # --- APPROACH 1: Integer Correlation ---
+    # --- TIMING RECOVERY METHODS (1-6) ---
     def detect_preamble(self, preamble, sps, filter_span):
         self.detected_delays_list = []
         reference = self.generate_reference_preamble(preamble, sps)
@@ -56,15 +59,14 @@ class Client_Rx:
             peak_index = np.argmax(np.abs(correlation))
             coarse_delay = peak_index - (reference_length - 1)
             
-            # Compensate only for the reference filter shift
             corrected_delay = coarse_delay + reference_group_delay
             self.detected_delays_list.append(corrected_delay)
-            print(f"Detected delay (Approach 1): {corrected_delay:.3f}")
 
         return self.detected_delays_list
 
-    # --- APPROACH 2: Parabolic Interpolation ---
+    # --- METHOD 2: Parabolic Interpolation ---
     def parabolic_interpolation(self, correlation):
+        """Fit parabola to correlation peak for fractional delay."""
         peak = np.argmax(np.abs(correlation))
         if peak == 0 or peak == len(correlation) - 1:
             return peak, 0.0
@@ -88,8 +90,9 @@ class Client_Rx:
         estimated_delay = coarse_delay + reference_group_delay
         return estimated_delay, frac, correlation
 
-    # --- APPROACH 3: Maximum Likelihood (ML) Fractional Delay Estimation ---
+    # --- METHOD 3: Maximum Likelihood Grid Search ---
     def ml_fractional_delay(self, rx_signal, preamble, sps, filter_span, grid_resolution=0.01):
+        """Estimate fractional delay via ML grid search."""
         reference = self.generate_reference_preamble(preamble, sps)
         correlation = signal.correlate(rx_signal, reference, mode='full')
         coarse_peak = np.argmax(np.abs(correlation))
@@ -97,7 +100,7 @@ class Client_Rx:
         fractional_grid = np.arange(-1.0, 1.0, grid_resolution)
         search_points = coarse_peak + fractional_grid
         
-        interpolated_corr = self.cubic_interpolate(correlation, search_points)
+        interpolated_corr = cubic_interpolate(correlation, search_points)
         best_idx = np.argmax(np.abs(interpolated_corr))
         
         refined_peak = coarse_peak + fractional_grid[best_idx]
@@ -107,8 +110,9 @@ class Client_Rx:
         
         return estimated_delay, fractional_grid[best_idx], correlation
 
-    # --- APPROACH 4: Early-Late Timing Recovery (Optimized Fast Interpolation) ---
+    # --- METHOD 4: Early-Late Loop ---
     def early_late_recovery(self, rx_signal, start_idx, sps=8, d=0.25, kp=0.01, ki=0.001, max_symbols=500):
+        """Timing recovery using Early-Late gate with PI control."""
         timing_phase = 0.0
         integrator = 0.0
         recovered_symbols = []
@@ -136,8 +140,6 @@ class Client_Rx:
             # Error calculation
             error = np.abs(y_early)**2 - np.abs(y_late)**2
             integrator += ki * error
-            
-            # CHANGED: Use negative feedback (-=) to drive error toward zero
             timing_phase -= (kp * error + integrator)
             timing_phase = np.clip(timing_phase, -sps, sps)
 
@@ -147,8 +149,9 @@ class Client_Rx:
             return np.zeros(max_symbols, dtype=complex), 0.0
         return np.array(recovered_symbols), timing_phase  # CHANGED: Return the actual scalar phase
 
-    # --- APPROACH 5: Gardner Timing Recovery (Optimized Fast Interpolation) ---
-    def Gardner_recovery(self, rx_signal, start_idx, sps=8, kp=0.1, ki=0.01, max_symbols=500):
+    # --- METHOD 5: Gardner Loop ---
+    def Gardner_recovery(self, rx_signal, start_idx, sps=8, kp=0.08, ki=0.01, max_symbols=500):
+        """Timing recovery using Gardner Timing Error Detector."""
         timing_phase = 0.0
         integrator = 0.0
         recovered_symbols = []
@@ -173,11 +176,9 @@ class Client_Rx:
             y_mid = interp_func([mid_idx])[0]
             y_curr = interp_func([current_symbol_idx])[0]
 
-            # Gardner Timing Error Detector Formula
+            # Gardner Timing Error Detector
             error = np.real(np.conj(y_mid) * (y_curr - y_prev))
             integrator += ki * error
-            
-            # CHANGED: Use negative feedback (-=) to track properly
             timing_phase -= (kp * error + integrator)
             timing_phase = np.clip(timing_phase, -sps, sps)
 
@@ -185,18 +186,14 @@ class Client_Rx:
 
         if len(recovered_symbols) == 0:
             return np.zeros(max_symbols, dtype=complex), 0.0
-        return np.array(recovered_symbols), timing_phase  # CHANGED: Return the actual scalar phase
-    
+        return np.array(recovered_symbols), timing_phase
 
-
+    # --- METHOD 6: LMS Adaptive Timing Recovery ---
     def lms_adaptive_timing_recovery(self, filt_signal, start_idx, sps, max_symbols):
-        """
-        Recovers timing synchronization using a Low-Complexity LMS Adaptive Filter
-        driven by a Gardner Timing Error Detector (TED).
-        """
+        """Adaptive timing recovery using LMS filter + Gardner TED."""
         recovered_symbols = []
         
-        # --- OPTIMIZATION: Create the interpolator ONCE outside the loop ---
+        # Create interpolator once outside loop
         t = np.arange(len(filt_signal))
         if np.iscomplexobj(filt_signal):
             interp_real = interp1d(t, np.real(filt_signal), kind='cubic', bounds_error=False, fill_value=0.0)
@@ -205,54 +202,93 @@ class Client_Rx:
         else:
             interp_func = interp1d(t, filt_signal, kind='cubic', bounds_error=False, fill_value=0.0)
         
-        # LMS Hyperparameters
-        mu_phase = 0.01  
-        mu_drift = 0.0001 
-        
-        # Initialize adaptive parameters (scalars)
-        phase_offset = 0.0
-        clock_drift = 0.0
-        
+        mu_phase, mu_drift = 0.01, 0.0001
+        phase_offset = clock_drift = 0.0
         current_idx = float(start_idx)
         
         for _ in range(max_symbols):
-            # Apply the current adaptive timing correction
             eval_idx = current_idx + phase_offset
-            
-            # Guard rails for signal boundaries
             if eval_idx + sps >= len(filt_signal) or eval_idx - sps < 0:
                 break
-                
-            t_curr = eval_idx
-            t_mid  = eval_idx - (sps / 2.0)
-            t_prev = eval_idx - sps
             
-            # Evaluate the pre-computed interpolator
-            y_curr = interp_func([t_curr])[0]
-            y_mid  = interp_func([t_mid])[0]
-            y_prev = interp_func([t_prev])[0]
-            
+            y_curr = interp_func([eval_idx])[0]
+            y_mid = interp_func([eval_idx - sps / 2.0])[0]
+            y_prev = interp_func([eval_idx - sps])[0]
             recovered_symbols.append(y_curr)
             
-            # Calculate the raw Gardner TED error
-            raw_error = np.real((y_curr - y_prev) * np.conj(y_mid))
-            
-            # Normalize to a "Bang-Bang" error (+1, -1, or 0)
-            ted_error = np.sign(raw_error)
-            
-            # FIX 1: Align the integrator (clock_drift) sign (+ instead of -) 
-            # so it works WITH the proportional term, not against it.
-            clock_drift += (mu_drift * ted_error)
-            
-            # FIX 2: Group the PI terms so negative feedback pulls them both correctly
+            ted_error = np.sign(np.real((y_curr - y_prev) * np.conj(y_mid)))
+            clock_drift += mu_drift * ted_error
             phase_offset -= (mu_phase * ted_error + clock_drift)
-            
-            # FIX 3: Bound the phase offset. This prevents the Bang-Bang logic 
-            # from jumping entire symbols during initial transients.
             phase_offset = np.clip(phase_offset, -sps, sps)
-            
-            # Move the base index forward by a nominal symbol period
             current_idx += sps
 
-        final_phase_offset = phase_offset
-        return np.array(recovered_symbols), final_phase_offset
+        return np.array(recovered_symbols), phase_offset
+
+    def estimate_channel_and_weights(self, rx_preamble, ideal_preamble, data_block_size, current_snr):
+        """Estimate channel via preamble and compute MMSE equalization weights."""
+
+        Y_preamble = np.fft.fft(rx_preamble)
+        X_preamble = np.fft.fft(ideal_preamble)
+
+        # Raw channel estimate at preamble resolution
+        H_est = Y_preamble / X_preamble
+
+        # Transform to Time Domain (Impulse Response)
+        h_time = np.fft.ifft(H_est)
+
+        # Zero-pad to target data block size to cleanly interpolate frequency response
+        h_padded = np.zeros(data_block_size, dtype=complex)
+        h_padded[:len(h_time)] = h_time
+
+        # Transform back to Frequency Domain at the new resolution
+        H_block = np.fft.fft(h_padded)
+
+        snr_linear = 10 ** (current_snr / 10.0)
+        noise_variance_ratio = 0.5 / snr_linear
+
+        W_mmse = np.conj(H_block) / (np.abs(H_block)**2 + noise_variance_ratio)
+        return H_block, W_mmse
+
+    def equalize_sc_fde(self, rx_signal, sps, ideal_preamble, current_snr, data_block_size, cp_length):
+        """SC-FDE equalization: downsample, remove CP, equalize in frequency domain."""
+        rx_symbols = rx_signal[::sps]
+        rx_preamble = rx_symbols[:len(ideal_preamble)]
+
+        _, W_mmse = self.estimate_channel_and_weights(rx_preamble, ideal_preamble, data_block_size, current_snr)
+
+        data_stream = rx_symbols[len(ideal_preamble):]
+        block_stride = data_block_size + cp_length
+        equalized_symbols = []
+
+        for i in range(0, len(data_stream), block_stride):
+            block_with_cp = data_stream[i : i + block_stride]
+            if len(block_with_cp) < block_stride:
+                break
+
+            block_data = block_with_cp[cp_length:]
+            Y_block = np.fft.fft(block_data)
+            X_hat_freq = Y_block * W_mmse
+            equalized_symbols.append(np.fft.ifft(X_hat_freq))
+
+        if len(equalized_symbols) == 0:
+            return np.array([], dtype=complex)
+        return np.concatenate(equalized_symbols)
+
+    """def equalize_blocks_only(self, time_symbols, W_mmse, data_block_size, cp_length):
+        Equalize downsampled symbols using MMSE weights.
+        block_stride = data_block_size + cp_length
+        equalized_list = []
+
+        for i in range(0, len(time_symbols), block_stride):
+            block_with_cp = time_symbols[i : i + block_stride]
+            if len(block_with_cp) < block_stride:
+                break
+
+            block_data = block_with_cp[cp_length:]
+            Y = np.fft.fft(block_data)
+            X_hat = Y * W_mmse
+            equalized_list.append(np.fft.ifft(X_hat))
+
+        if len(equalized_list) == 0:
+            return np.array([], dtype=complex)
+        return np.concatenate(equalized_list)"""
