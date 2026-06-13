@@ -213,17 +213,17 @@ class SimulationEngine:
         """Method 1: Integer Correlation."""
         detected_delays = receiver.detect_preamble(preamble, sps, cfg.FILTER_SPAN)
         coarse_delay = int(round(detected_delays[0]))
-        receiver.coarse_delay = max(coarse_delay - 1, 0)
+        receiver.coarse_delay = max(coarse_delay, 0)
         print(receiver.coarse_delay)
         total_symbols = cfg.PREAMBLE_LENGTH + self.num_data_symbols
         frame_samples = filt_signal[coarse_delay : coarse_delay + total_symbols * sps]
         
-        equalized = receiver.equalize_sc_fde(
+        equalized, H_est = receiver.equalize_sc_fde(
             frame_samples, sps, preamble, cfg.TARGET_SNR,
             cfg.DATA_BLOCK_SIZE, cfg.CP_LENGTH
         )
         #self.plot_constellation(equalized, title="Method 1: Integer Correlation Constellation")
-        return equalized, to_scalar(coarse_delay)
+        return equalized, to_scalar(coarse_delay), H_est
     
     def _process_method2(self, filt_signal, receiver, preamble, sps):
         """Method 2: Parabolic Fractional Interpolation."""
@@ -235,13 +235,13 @@ class SimulationEngine:
         t_samples = est_delay + np.arange(total_symbols * sps)
         frame_samples = cubic_interpolate(filt_signal, t_samples)
         
-        equalized = receiver.equalize_sc_fde(
+        equalized, H_est = receiver.equalize_sc_fde(
             frame_samples, sps, preamble, cfg.TARGET_SNR,
             cfg.DATA_BLOCK_SIZE, cfg.CP_LENGTH
         )
         #self.plot_constellation(equalized, title="Method 2: Parabolic Interpolation Constellation")
         
-        return equalized, to_scalar(est_delay)
+        return equalized, to_scalar(est_delay), H_est
     
     def _process_method3(self, filt_signal, receiver, preamble, sps):
         """Method 3: Maximum Likelihood Grid Search."""
@@ -254,12 +254,11 @@ class SimulationEngine:
         t_samples = est_delay + np.arange(total_symbols * sps)
         frame_samples = cubic_interpolate(filt_signal, t_samples)
         
-        equalized = receiver.equalize_sc_fde(
+        equalized, H_est = receiver.equalize_sc_fde(
             frame_samples, sps, preamble, cfg.TARGET_SNR,
             cfg.DATA_BLOCK_SIZE, cfg.CP_LENGTH
         )
-        
-        return equalized, to_scalar(est_delay)
+        return equalized, to_scalar(est_delay), H_est
     
     def _process_method4(self, filt_signal, receiver, preamble, sps, coarse_delay):
         """Method 4: Block-by-Block Early-Late Loop Tracking with FDE Phase Correction."""
@@ -271,7 +270,7 @@ class SimulationEngine:
         
         # 1. Estimate base static MMSE weights from the unshifted preamble
         rx_preamble = filt_signal[coarse_delay : coarse_delay + cfg.PREAMBLE_LENGTH * sps : sps]
-        _, W_mmse = receiver.estimate_channel_and_weights(
+        H_est, W_mmse = receiver.estimate_channel_and_weights(
             rx_preamble, preamble, cfg.DATA_BLOCK_SIZE, cfg.TARGET_SNR, cfg.CP_LENGTH
         )
         
@@ -284,7 +283,7 @@ class SimulationEngine:
         # Initialize Loop Filter variables
         timing_phase = 0.0
         integrator = 0.0
-        kp, ki = 0.01, 0.001  # PI gains
+        kp, ki = 0.03, 0.001  # PI gains
         
         equalized_payload = []
 
@@ -342,7 +341,7 @@ class SimulationEngine:
         equalized_payload = np.array(equalized_payload)
         #self.plot_constellation(equalized_payload, title="Method 4: Block-by-Block Tracking Constellation")
         
-        return equalized_payload, to_scalar(coarse_delay + timing_phase)
+        return equalized_payload, to_scalar(coarse_delay + timing_phase), H_est
     
     def _process_method5(self, filt_signal, receiver, preamble, sps, coarse_delay):
         """Method 5: Gardner Loop Tracking (Block-by-Block FDE)."""
@@ -355,7 +354,7 @@ class SimulationEngine:
         
         # 1. Estimate base channel weights from the static preamble
         rx_preamble = filt_signal[coarse_delay : coarse_delay + cfg.PREAMBLE_LENGTH * sps : sps]
-        _, W_mmse = receiver.estimate_channel_and_weights(
+        H_est, W_mmse = receiver.estimate_channel_and_weights(
             rx_preamble, preamble, cfg.DATA_BLOCK_SIZE, cfg.TARGET_SNR, cfg.CP_LENGTH
         )
         
@@ -371,7 +370,7 @@ class SimulationEngine:
         # Loop Parameters
         timing_phase = 0.0
         integrator = 0.0
-        kp, ki = 0.02, 0.001  # Damped for stability
+        kp, ki = 0.04, 0.002  # Damped for stability
         
         k_bins = np.fft.fftfreq(cfg.DATA_BLOCK_SIZE) * cfg.DATA_BLOCK_SIZE
         equalized_payload = []
@@ -425,7 +424,7 @@ class SimulationEngine:
             
             equalized_payload.extend(equalized_block)
             
-        return np.array(equalized_payload), float(coarse_delay + timing_phase)
+        return np.array(equalized_payload), float(coarse_delay + timing_phase), H_est
     
     def _process_method6(self, filt_signal, receiver, preamble, sps, coarse_delay):
         """Method 6: LMS Adaptive Timing Recovery (Block-by-Block FDE)."""
@@ -438,7 +437,7 @@ class SimulationEngine:
         
         # 1. Estimate base channel weights
         rx_preamble = filt_signal[coarse_delay : coarse_delay + cfg.PREAMBLE_LENGTH * sps : sps]
-        _, W_mmse = receiver.estimate_channel_and_weights(
+        H_est, W_mmse = receiver.estimate_channel_and_weights(
             rx_preamble, preamble, cfg.DATA_BLOCK_SIZE, cfg.TARGET_SNR, cfg.CP_LENGTH
         )
         
@@ -454,7 +453,7 @@ class SimulationEngine:
         # Loop Parameters
         phase_offset = 0.0
         clock_drift = 0.0
-        mu_phase, mu_drift = 0.01, 0.0001
+        mu_phase, mu_drift = 0.04, 0.0002
         
         k_bins = np.fft.fftfreq(cfg.DATA_BLOCK_SIZE) * cfg.DATA_BLOCK_SIZE
         equalized_payload = []
@@ -508,9 +507,9 @@ class SimulationEngine:
             
             equalized_payload.extend(equalized_block)
             
-        return np.array(equalized_payload), float(coarse_delay + phase_offset)
+        return np.array(equalized_payload), float(coarse_delay + phase_offset), H_est
     
-    def run_snr_sweep(self, beta, delay, sps):
+    def run_snr_sweep(self, beta, delay, sps, antenna:int):
         """
         Run SNR sweep test (varying Rician K-factor).
         
@@ -530,10 +529,16 @@ class SimulationEngine:
         clean_signal, rx_signals = self.create_transmitted_signal(
             self.sender, self.preamble, delay, cfg.FREQ_OFFSET, sps
         )
+
+        if antenna == 2:
+            rx_signals = np.array(rx_signals)
+            rx_signals = rx_signals * np.exp(-1j *cfg.ANTENNA2_PHASE_SHIFT_VALUES[0])
+            print(f"Using Antenna 2 with phase shift {cfg.ANTENNA2_PHASE_SHIFT_VALUES[0]} radians")
         
         results = {
             'ber': {i: [] for i in range(1, 7)},
-            'delay': {i: [] for i in range(1, 7)}
+            'delay': {i: [] for i in range(1, 7)},
+            'H_est': {i: [] for i in range(1, 7)}
         }
         
         # Process each received signal
@@ -545,21 +550,32 @@ class SimulationEngine:
             # Process through all 6 methods
             for method_id in range(1, 7):
                 try:
-                    equalized, est_delay = self.process_received_signal(
+                    equalized, est_delay, H_est = self.process_received_signal(
                         rx_sig, method_id, receiver,
                         self.preamble, sps
                     )
+
+                    """tx_symbols = self.sender.mapped_bits
+                    N = min(len(equalized), len(tx_symbols))
+
+                    tx = tx_symbols[:N]
+                    rx = equalized[:N]
+
+                    error = np.mean(np.abs(rx - tx))
+                    print("Residual error:", error)"""
                     
                     ber = calculate_ber(
                         self.original_bits_flat,
                         symbols_to_bits(equalized)
                     )
-                    
+
+                    results['H_est'][method_id].append(H_est)
                     results['ber'][method_id].append(ber)
                     results['delay'][method_id].append(est_delay)
                     
                 except Exception as e:
                     print(f"Error in method {method_id}: {e}")
+                    results['H_est'][method_id].append([0])
                     results['ber'][method_id].append(1.0)
                     results['delay'][method_id].append(0.0)
         
@@ -581,7 +597,8 @@ class SimulationEngine:
         results = {
             'ber': {i: [] for i in range(1, 7)},
             'delay': {i: [] for i in range(1, 7)},
-            'sps_values': cfg.SPS_SWEEP_VALUES
+            'sps_values': cfg.SPS_SWEEP_VALUES,
+            'H_est': {i: [] for i in range(1, 7)}
         }
         
         for test_sps in cfg.SPS_SWEEP_VALUES:
@@ -606,7 +623,7 @@ class SimulationEngine:
             
             for method_id in range(1, 7):
                 try:
-                    equalized, est_delay = self.process_received_signal(
+                    equalized, est_delay, H_est = self.process_received_signal(
                         rx_sig, method_id, receiver,
                         self.preamble, test_sps
                     )
@@ -618,10 +635,12 @@ class SimulationEngine:
                     
                     results['ber'][method_id].append(ber)
                     results['delay'][method_id].append(est_delay)
+                    results['H_est'][method_id].append(H_est)
                     
                 except Exception as e:
                     print(f"Error in method {method_id}: {e}")
                     results['ber'][method_id].append(1.0)
                     results['delay'][method_id].append(0.0)
+                    results['H_est'][method_id].append([0])
         
         return results

@@ -170,7 +170,7 @@ class Client_Rx:
         return np.array(block_symbols), block_error
 
     # --- METHOD 5: Gardner Loop ---
-    def Gardner_recovery(self, rx_signal, start_idx, sps=8, kp=0.08, ki=0.01, max_symbols=500):
+    def Gardner_recovery(self, rx_signal, start_idx, sps=8, kp=0.1, ki=0.01, max_symbols=500):
         """Timing recovery using Gardner Timing Error Detector."""
         timing_phase = 0.0
         integrator = 0.0
@@ -222,7 +222,7 @@ class Client_Rx:
         else:
             interp_func = interp1d(t, filt_signal, kind='cubic', bounds_error=False, fill_value=0.0)
         
-        mu_phase, mu_drift = 0.01, 0.0001
+        mu_phase, mu_drift = 0.02, 0.0002
         phase_offset = clock_drift = 0.0
         current_idx = float(start_idx)
         
@@ -310,7 +310,7 @@ class Client_Rx:
         rx_symbols = rx_signal[::sps]
         rx_preamble = rx_symbols[:len(ideal_preamble)]
 
-        _, W_mmse = self.estimate_channel_and_weights(rx_preamble, ideal_preamble, data_block_size, current_snr, cp_length)
+        H_est, W_mmse = self.estimate_channel_and_weights(rx_preamble, ideal_preamble, data_block_size, current_snr, cp_length)
         
         data_stream = rx_symbols[len(ideal_preamble):]
         block_stride = data_block_size + cp_length
@@ -328,7 +328,7 @@ class Client_Rx:
 
         if len(equalized_symbols) == 0:
             return np.array([], dtype=complex)
-        return np.concatenate(equalized_symbols)
+        return np.concatenate(equalized_symbols), H_est
 
     def equalize_blocks_only(self, time_symbols, W_mmse, data_block_size, cp_length):
         """Equalize downsampled symbols using MMSE weights."""

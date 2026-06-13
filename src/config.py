@@ -15,9 +15,10 @@ import numpy as np
 SAMPLE_RATE = 4e6  # 4 MHz symbol rate (Rs)
 SAMPLES_PER_SYMBOL = 8  # Default SPS
 SAMPLING_FREQ = SAMPLE_RATE * SAMPLES_PER_SYMBOL  # 32 MHz
+CARRIER_FREQ = 2.4e9  # 2.4 GHz carrier frequency
 
 # Bit and data parameters
-NUMBER_OF_BITS = 50000
+NUMBER_OF_BITS = 30000
 BIT_MAPPING_QPSK = {
     (0, 0): (1 + 1j) / np.sqrt(2),
     (0, 1): (1 - 1j) / np.sqrt(2),
@@ -48,6 +49,14 @@ PREAMBLE_LENGTH = 127
 PREAMBLE_ROOT_INDEX = 1
 
 # ============================================================================
+# PHYSICAL CONSTANTS
+# ============================================================================
+
+SPEED_OF_LIGHT = 3e8  # m/s
+ANTENNAS_DISTANCE = 5e-2 #Distance between two receivers in meters, used for calculating DOA
+DOA = 30  # Angle of Arrival in degrees, used for calculating DOA-based delay differences
+
+# ============================================================================
 # CHANNEL SIMULATION PARAMETERS
 # ============================================================================
 
@@ -63,14 +72,11 @@ TARGET_K_FACTOR = 12
 FREQ_OFFSET = 0
 
 # Delay parameters
-DELAY_VALUES = [160.4]  # Fractional delay for testing
+ANTENNA1_DELAY_VALUES = [160.4]  # Fractional delay for testing
+ANTENNA2_PHASE_SHIFT_VALUES = []
+ANTENNA2_PHASE_SHIFT_VALUES.append(2*np.pi*CARRIER_FREQ*ANTENNAS_DISTANCE * np.sin(np.radians(DOA))/ SPEED_OF_LIGHT)
+print(f"ANTENNA2_PHASE_SHIFT_VALUES: {ANTENNA2_PHASE_SHIFT_VALUES}")
 SPS_SWEEP_VALUES = [1, 2, 4, 8, 16]  # SPS values for sweep analysis
-
-# ============================================================================
-# PHYSICAL CONSTANTS
-# ============================================================================
-
-SPEED_OF_LIGHT = 3e8  # m/s
 
 # ============================================================================
 # TIMING RECOVERY ALGORITHM PARAMETERS
