@@ -14,7 +14,7 @@ import numpy as np
 from scipy import signal
 from scipy.interpolate import interp1d
 from signal_processing import cubic_interpolate
-
+import matplotlib.pyplot as plt
 
 class Client_Rx:
     def __init__(self, signal_list, is_qpsk=False):
@@ -51,18 +51,46 @@ class Client_Rx:
         self.detected_delays_list = []
         reference = self.generate_reference_preamble(preamble, sps)
         reference_length = len(reference)
-        # reference contains a group delay of (filter_span * sps) / 2 = 40 samples
+        
+        # Reference contains a group delay of (filter_span * sps) / 2
         reference_group_delay = (filter_span * sps) // 2
 
         for filt_signal in self.filtered_signal:
-            correlation = signal.correlate(filt_signal, reference, mode='full')
-            peak_index = np.argmax(np.abs(correlation))
-            coarse_delay = peak_index - (reference_length - 1)
+            # 1. Switch to 'valid' mode. It only computes correlation where the signals fully overlap.
+            # This makes the base alignment index exactly equal to the peak_index.
+            correlation = signal.correlate(filt_signal, reference, mode='valid')
+            abs_corr = np.abs(correlation)
             
-            corrected_delay = coarse_delay + reference_group_delay
+            # Find the coarse integer peak index
+            peak_index = np.argmax(abs_corr)
+            
+            # --- 2. Parabolic Interpolation for Sub-Sample Precision ---
+            # Protect array boundaries
+            if 0 < peak_index < len(abs_corr) - 1:
+                alpha = abs_corr[peak_index - 1]  # Left neighbor
+                beta = abs_corr[peak_index]       # Discrete peak
+                gamma = abs_corr[peak_index + 1]  # Right neighbor
+                
+                denominator = alpha - 2 * beta + gamma
+                if np.abs(denominator) > 1e-6:
+                    fractional_offset = 0.5 * (alpha - gamma) / denominator
+                else:
+                    fractional_offset = 0.0
+            else:
+                fractional_offset = 0.0
+                
+            # Combine the integer peak with its sub-sample fractional adjustment
+            precise_peak = float(peak_index) + fractional_offset
+            
+            # 3. Calculate corrected delay without any arbitrary safety hard-coding
+            # In 'valid' mode, the index directly represents the start delay.
+            corrected_delay = precise_peak + reference_group_delay
+            
+            # Save the exact precise delay
             self.detected_delays_list.append(corrected_delay)
 
         return self.detected_delays_list
+    
 
     # --- METHOD 2: Parabolic Interpolation ---
     def parabolic_interpolation(self, correlation):
@@ -111,43 +139,35 @@ class Client_Rx:
         return estimated_delay, fractional_grid[best_idx], correlation
 
     # --- METHOD 4: Early-Late Loop ---
-    def early_late_recovery(self, rx_signal, start_idx, sps=8, d=0.25, kp=0.01, ki=0.001, max_symbols=500):
-        """Timing recovery using Early-Late gate with PI control."""
-        timing_phase = 0.0
-        integrator = 0.0
-        recovered_symbols = []
+    def early_late_block_recovery(self, interp_func, start_idx, block_symbol_offset, block_size, sps, timing_phase, d=0.25):
+        """
+        Processes a single block of symbols using a FIXED timing phase 
+        to preserve circular convolution for SC-FDE.
+        """
+        block_symbols = []
+        block_error = 0.0
 
-        t = np.arange(len(rx_signal))
-        if np.iscomplexobj(rx_signal):
-            interp_real = interp1d(t, np.real(rx_signal), kind='cubic', bounds_error=False, fill_value=0.0)
-            interp_imag = interp1d(t, np.imag(rx_signal), kind='cubic', bounds_error=False, fill_value=0.0)
-            interp_func = lambda pts: interp_real(pts) + 1j * interp_imag(pts)
-        else:
-            interp_func = interp1d(t, rx_signal, kind='cubic', bounds_error=False, fill_value=0.0)
-
-        for symbol_index in range(max_symbols):
-            current_symbol_idx = start_idx + symbol_index * sps + timing_phase
+        for m in range(block_size):
+            # Calculate the absolute symbol index within the frame sequence
+            global_symbol_idx = block_symbol_offset + m
+            
+            # Apply the current uniform timing phase for this entire block
+            current_symbol_idx = start_idx + global_symbol_idx * sps + timing_phase
             early_idx = current_symbol_idx - d * sps
             late_idx = current_symbol_idx + d * sps
 
-            if early_idx < 0 or late_idx >= len(rx_signal) or np.isnan(current_symbol_idx):
-                break
-
+            # Interpolate early, current, and late samples
             y_early = interp_func([early_idx])[0]
             y_curr = interp_func([current_symbol_idx])[0]
             y_late = interp_func([late_idx])[0]
 
-            # Error calculation
+            block_symbols.append(y_curr)
+
+            # Accumulate the timing error across the block
             error = np.abs(y_early)**2 - np.abs(y_late)**2
-            integrator += ki * error
-            timing_phase -= (kp * error + integrator)
-            timing_phase = np.clip(timing_phase, -sps, sps)
+            block_error += error
 
-            recovered_symbols.append(y_curr)
-
-        if len(recovered_symbols) == 0:
-            return np.zeros(max_symbols, dtype=complex), 0.0
-        return np.array(recovered_symbols), timing_phase  # CHANGED: Return the actual scalar phase
+        return np.array(block_symbols), block_error
 
     # --- METHOD 5: Gardner Loop ---
     def Gardner_recovery(self, rx_signal, start_idx, sps=8, kp=0.08, ki=0.01, max_symbols=500):
@@ -224,8 +244,32 @@ class Client_Rx:
 
         return np.array(recovered_symbols), phase_offset
 
-    def estimate_channel_and_weights(self, rx_preamble, ideal_preamble, data_block_size, current_snr):
-        """Estimate channel via preamble and compute MMSE equalization weights."""
+    def plot_channel_estimation(self, h_time, h_block):
+        """
+        h_time: Your raw impulse response estimate (ifft of H_est)
+        h_block: Your final MMSE-equalized channel (FFT of h_padded)
+        """
+        fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+        
+        # 1. Time Domain Impulse Response
+        axes[0].stem(np.abs(h_time), label='Raw Estimate')
+        axes[0].set_title("Time Domain Impulse Response")
+        axes[0].set_xlabel("Sample Delay")
+        axes[0].set_ylabel("Magnitude")
+        axes[0].grid(True, linestyle='--')
+        
+        # 2. Frequency Domain Channel Response
+        axes[1].plot(np.abs(h_block), label='Equalized Channel')
+        axes[1].set_title("Frequency Domain Channel Response")
+        axes[1].set_xlabel("Subcarrier Index")
+        axes[1].set_ylabel("Magnitude")
+        axes[1].grid(True, linestyle='--')
+        
+        plt.tight_layout()
+        plt.show()
+
+    def estimate_channel_and_weights(self, rx_preamble, ideal_preamble, data_block_size, current_snr, cp_length):
+        """Estimate channel via preamble, denoise in time-domain, and compute MMSE weights."""
 
         Y_preamble = np.fft.fft(rx_preamble)
         X_preamble = np.fft.fft(ideal_preamble)
@@ -236,15 +280,27 @@ class Client_Rx:
         # Transform to Time Domain (Impulse Response)
         h_time = np.fft.ifft(H_est)
 
-        # Zero-pad to target data block size to cleanly interpolate frequency response
+        # --- FIX: Denoise by keeping only the taps within the Cyclic Prefix span ---
+        # The CP length defines the maximum physical delay spread of your channel.
+        h_denoised = np.zeros_like(h_time)
+        h_denoised[:cp_length] = h_time[:cp_length]
+
+        # Zero-pad the denoised impulse response to target data block size
         h_padded = np.zeros(data_block_size, dtype=complex)
-        h_padded[:len(h_time)] = h_time
+        h_padded[:len(h_denoised)] = h_denoised
 
         # Transform back to Frequency Domain at the new resolution
         H_block = np.fft.fft(h_padded)
 
+        #self.plot_channel_estimation(h_time, H_block)
+
+
+        # Calculate actual average channel power to correctly scale the noise ratio
+        channel_power = np.mean(np.abs(H_block)**2)
         snr_linear = 10 ** (current_snr / 10.0)
-        noise_variance_ratio = 0.5 / snr_linear
+        
+        # Scale your noise variance ratio relative to the actual estimated channel power
+        noise_variance_ratio = channel_power / snr_linear
 
         W_mmse = np.conj(H_block) / (np.abs(H_block)**2 + noise_variance_ratio)
         return H_block, W_mmse
@@ -254,8 +310,8 @@ class Client_Rx:
         rx_symbols = rx_signal[::sps]
         rx_preamble = rx_symbols[:len(ideal_preamble)]
 
-        _, W_mmse = self.estimate_channel_and_weights(rx_preamble, ideal_preamble, data_block_size, current_snr)
-
+        _, W_mmse = self.estimate_channel_and_weights(rx_preamble, ideal_preamble, data_block_size, current_snr, cp_length)
+        
         data_stream = rx_symbols[len(ideal_preamble):]
         block_stride = data_block_size + cp_length
         equalized_symbols = []
@@ -274,8 +330,8 @@ class Client_Rx:
             return np.array([], dtype=complex)
         return np.concatenate(equalized_symbols)
 
-    """def equalize_blocks_only(self, time_symbols, W_mmse, data_block_size, cp_length):
-        Equalize downsampled symbols using MMSE weights.
+    def equalize_blocks_only(self, time_symbols, W_mmse, data_block_size, cp_length):
+        """Equalize downsampled symbols using MMSE weights."""
         block_stride = data_block_size + cp_length
         equalized_list = []
 
@@ -291,4 +347,4 @@ class Client_Rx:
 
         if len(equalized_list) == 0:
             return np.array([], dtype=complex)
-        return np.concatenate(equalized_list)"""
+        return np.concatenate(equalized_list)

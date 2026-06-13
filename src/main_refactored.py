@@ -21,7 +21,7 @@ import config as cfg
 from utilities import calculate_ber, to_scalar, symbols_to_bits, calculate_range_error
 
 # Set random seed for reproducibility
-np.random.seed(42)
+np.random.seed(60)
 
 
 def run_phase1_snr_sweep(engine, betas, delays, sps):

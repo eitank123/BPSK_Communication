@@ -17,7 +17,7 @@ SAMPLES_PER_SYMBOL = 8  # Default SPS
 SAMPLING_FREQ = SAMPLE_RATE * SAMPLES_PER_SYMBOL  # 32 MHz
 
 # Bit and data parameters
-NUMBER_OF_BITS = 10000
+NUMBER_OF_BITS = 50000
 BIT_MAPPING_QPSK = {
     (0, 0): (1 + 1j) / np.sqrt(2),
     (0, 1): (1 - 1j) / np.sqrt(2),
@@ -38,7 +38,7 @@ FARROW_INTERPOLATION_DEGREE = 3
 # ============================================================================
 
 CP_LENGTH = 16  # Cyclic Prefix length
-DATA_BLOCK_SIZE = 512  # FFT size for equalization
+DATA_BLOCK_SIZE = 256  # FFT size for equalization
 
 # ============================================================================
 # PREAMBLE CONFIGURATION
@@ -52,18 +52,18 @@ PREAMBLE_ROOT_INDEX = 1
 # ============================================================================
 
 # SNR/EbN0 sweep values
-SNR_VALUES = [0, 2, 4, 6, 8, 10]  # dB
+SNR_VALUES = [0, 2, 4, 6, 8, 10, 12]  # dB
 TARGET_SNR = 8  # Default SNR for simulations
 
 # Rician fading K-factors
-RICIAN_K_FACTORS = [0, 2, 4, 6, 8, 10]  # dB
-TARGET_K_FACTOR = 6
+RICIAN_K_FACTORS = [8, 12, 16, 20, 24, 28]  # dB
+TARGET_K_FACTOR = 12
 
 # Frequency offset
 FREQ_OFFSET = 0
 
 # Delay parameters
-DELAY_VALUES = [200.4]  # Fractional delay for testing
+DELAY_VALUES = [160.4]  # Fractional delay for testing
 SPS_SWEEP_VALUES = [1, 2, 4, 8, 16]  # SPS values for sweep analysis
 
 # ============================================================================
@@ -78,8 +78,8 @@ SPEED_OF_LIGHT = 3e8  # m/s
 
 # Early-Late Loop parameters
 EARLY_LATE_DEPTH = 0.25  # d parameter for early-late gate
-EARLY_LATE_KP = 0.01  # Proportional gain
-EARLY_LATE_KI = 0.001  # Integral gain
+EARLY_LATE_KP = 0.015  # Proportional gain
+EARLY_LATE_KI = 0.002  # Integral gain
 
 # Gardner Loop parameters
 GARDNER_KP = 0.08

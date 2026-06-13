@@ -7,6 +7,7 @@ and Rician fading channel simulation.
 
 import numpy as np
 from config import SPEED_OF_LIGHT
+import matplotlib.pyplot as plt
 
 
 def add_cyclic_prefix(data_block, cp_length):
@@ -67,7 +68,7 @@ def generate_zadoff_chu_preamble(length, root_index=1):
 
 import numpy as np
 
-def add_rician_fading(signal, k_db, ebno_db, sps, num_taps=5, decay_factor=2.0):
+def add_rician_fading(signal, k_db, ebno_db, sps, num_taps=12, decay_factor=2.0):
     """
     Apply a frequency-selective Rician fading channel using a Tapped Delay Line (TDL) 
     model with an exponential Power Delay Profile, followed by AWGN calibration.
@@ -83,7 +84,7 @@ def add_rician_fading(signal, k_db, ebno_db, sps, num_taps=5, decay_factor=2.0):
     sps : int
         Samples per symbol.
     num_taps : int, optional
-        Number of multipath taps (resolvable echoes at sample spacing). Default is 5.
+        Number of multipath taps (resolvable echoes at sample spacing). Default is 8.
     decay_factor : float, optional
         Determines how fast the multipath echo power decays over time. Default is 2.0.
         
@@ -117,7 +118,15 @@ def add_rician_fading(signal, k_db, ebno_db, sps, num_taps=5, decay_factor=2.0):
     
     # Combine LoS and NLoS to form the Taped Delay Line impulse response
     h_taps = h_los + h_nlos
-    
+
+    """plt.figure(figsize=(8, 4))
+    plt.stem(np.abs(h_taps), basefmt=" ")
+    plt.title(f"Rician Tapped Delay Line Impulse Response (K={k_db} dB)")
+    plt.xlabel("Tap Index (Sample Delay)")
+    plt.ylabel("Magnitude")
+    plt.grid(True, linestyle='--', alpha=0.7)
+    plt.show()
+    """
     # ========================================================================
     # STEP 3: Apply Channel via Linear Convolution (Introduces ISI)
     # ========================================================================
