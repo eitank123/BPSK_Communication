@@ -9,7 +9,7 @@ import numpy as np
 from client_Tx import Client_Tx
 from client_Rx import Client_Rx
 from channel import (
-    generate_zadoff_chu_preamble,
+    generate_zadoff_chu_conjugate_pair,
     add_cyclic_prefix,
     add_rician_fading,
     create_formatted_payload,
@@ -52,9 +52,10 @@ class SimulationEngine:
     
     def initialize_preamble(self):
         """Generate Zadoff-Chu preamble."""
-        self.preamble = generate_zadoff_chu_preamble(
+        self.preamble = generate_zadoff_chu_conjugate_pair(
             cfg.PREAMBLE_LENGTH,
-            cfg.PREAMBLE_ROOT_INDEX
+            cfg.PREAMBLE_ROOT_INDEX,
+            cfg.CP_LENGTH
         )
     
     def create_transmitted_signal(self, sender, preamble, delay, freq_offset, sps):
@@ -227,16 +228,21 @@ class SimulationEngine:
     
     def _process_method2(self, filt_signal, receiver, preamble, sps):
         """Method 2: Parabolic Fractional Interpolation."""
-        est_delay, _, _ = receiver.estimate_fractional_delay(
-            filt_signal, preamble, sps, cfg.FILTER_SPAN
+        est_delay, _, doppler_shift, _ = receiver.estimate_fractional_delay(
+            filt_signal, preamble, cfg.CP_LENGTH, sps, cfg.FILTER_SPAN
         )
-        
+        print(est_delay, doppler_shift)
         total_symbols = cfg.PREAMBLE_LENGTH + self.num_data_symbols
         t_samples = est_delay + np.arange(total_symbols * sps)
         frame_samples = cubic_interpolate(filt_signal, t_samples)
+        cfo_hz = (doppler_shift * cfg.PREAMBLE_ROOT_INDEX * cfg.SAMPLING_FREQ) / (cfg.PREAMBLE_LENGTH ** 2)
+        print(doppler_shift, cfo_hz)
+        n = np.arange(len(frame_samples))
+        phase_correction = np.exp(-1j * 2 * np.pi * cfo_hz * n / cfg.SAMPLING_FREQ)
+        doppler_corrected_samples = frame_samples * phase_correction
         
         equalized, H_est = receiver.equalize_sc_fde(
-            frame_samples, sps, preamble, cfg.TARGET_SNR,
+            doppler_corrected_samples, sps, preamble, cfg.TARGET_SNR,
             cfg.DATA_BLOCK_SIZE, cfg.CP_LENGTH
         )
         #self.plot_constellation(equalized, title="Method 2: Parabolic Interpolation Constellation")
@@ -270,8 +276,25 @@ class SimulationEngine:
         
         # 1. Estimate base static MMSE weights from the unshifted preamble
         rx_preamble = filt_signal[coarse_delay : coarse_delay + cfg.PREAMBLE_LENGTH * sps : sps]
+        # 1. Calculate the size of a single preamble block (CP + ZC)
+        # (Assuming 'preamble' is the full [CP1 + ZC1 + CP2 + ZC2] sequence)
+        single_block_len = len(preamble) // 2  
+
+        # 2. Extract only the first block from your downsampled symbols
+        rx_first_block = filt_signal[:single_block_len]
+        ideal_first_block = preamble[:single_block_len]
+
+        # 3. Strip the Cyclic Prefix so the length matches your cfg.DATA_BLOCK_SIZE (e.g., 256)
+        rx_preamble_pure = rx_first_block[cfg.CP_LENGTH:]
+        ideal_preamble_pure = ideal_first_block[cfg.CP_LENGTH:]
+
+        # 4. NOW call the estimation function with the cleaned, size-256 arrays
         H_est, W_mmse = receiver.estimate_channel_and_weights(
-            rx_preamble, preamble, cfg.DATA_BLOCK_SIZE, cfg.TARGET_SNR, cfg.CP_LENGTH
+            rx_preamble=rx_preamble_pure, 
+            ideal_preamble=ideal_preamble_pure, 
+            data_block_size=cfg.DATA_BLOCK_SIZE, 
+            current_snr=cfg.TARGET_SNR, 
+            cp_length=cfg.CP_LENGTH
         )
         
         # 2. Setup the cubic interpolator for the entire received frame
@@ -354,8 +377,25 @@ class SimulationEngine:
         
         # 1. Estimate base channel weights from the static preamble
         rx_preamble = filt_signal[coarse_delay : coarse_delay + cfg.PREAMBLE_LENGTH * sps : sps]
+        # 1. Calculate the size of a single preamble block (CP + ZC)
+        # (Assuming 'preamble' is the full [CP1 + ZC1 + CP2 + ZC2] sequence)
+        single_block_len = len(preamble) // 2  
+
+        # 2. Extract only the first block from your downsampled symbols
+        rx_first_block = filt_signal[:single_block_len]
+        ideal_first_block = preamble[:single_block_len]
+
+        # 3. Strip the Cyclic Prefix so the length matches your cfg.DATA_BLOCK_SIZE (e.g., 256)
+        rx_preamble_pure = rx_first_block[cfg.CP_LENGTH:]
+        ideal_preamble_pure = ideal_first_block[cfg.CP_LENGTH:]
+
+        # 4. NOW call the estimation function with the cleaned, size-256 arrays
         H_est, W_mmse = receiver.estimate_channel_and_weights(
-            rx_preamble, preamble, cfg.DATA_BLOCK_SIZE, cfg.TARGET_SNR, cfg.CP_LENGTH
+            rx_preamble=rx_preamble_pure, 
+            ideal_preamble=ideal_preamble_pure, 
+            data_block_size=cfg.DATA_BLOCK_SIZE, 
+            current_snr=cfg.TARGET_SNR, 
+            cp_length=cfg.CP_LENGTH
         )
         
         # 2. Setup cubic interpolator strictly for the Timing Error Detector (TED)
@@ -437,8 +477,25 @@ class SimulationEngine:
         
         # 1. Estimate base channel weights
         rx_preamble = filt_signal[coarse_delay : coarse_delay + cfg.PREAMBLE_LENGTH * sps : sps]
+        # 1. Calculate the size of a single preamble block (CP + ZC)
+        # (Assuming 'preamble' is the full [CP1 + ZC1 + CP2 + ZC2] sequence)
+        single_block_len = len(preamble) // 2  
+
+        # 2. Extract only the first block from your downsampled symbols
+        rx_first_block = filt_signal[:single_block_len]
+        ideal_first_block = preamble[:single_block_len]
+
+        # 3. Strip the Cyclic Prefix so the length matches your cfg.DATA_BLOCK_SIZE (e.g., 256)
+        rx_preamble_pure = rx_first_block[cfg.CP_LENGTH:]
+        ideal_preamble_pure = ideal_first_block[cfg.CP_LENGTH:]
+
+        # 4. NOW call the estimation function with the cleaned, size-256 arrays
         H_est, W_mmse = receiver.estimate_channel_and_weights(
-            rx_preamble, preamble, cfg.DATA_BLOCK_SIZE, cfg.TARGET_SNR, cfg.CP_LENGTH
+            rx_preamble=rx_preamble_pure, 
+            ideal_preamble=ideal_preamble_pure, 
+            data_block_size=cfg.DATA_BLOCK_SIZE, 
+            current_snr=cfg.TARGET_SNR, 
+            cp_length=cfg.CP_LENGTH
         )
         
         # 2. Setup cubic interpolator strictly for the LMS TED

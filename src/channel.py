@@ -41,32 +41,59 @@ def add_cyclic_prefix(data_block, cp_length):
     return formatted_block
 
 
-def generate_zadoff_chu_preamble(length, root_index=1):
+
+def generate_zadoff_chu_conjugate_pair(length, root_index=1, cp_length=16):
     """
-    Generate a Zadoff-Chu sequence for preamble/pilot signals.
+    Generate a Zadoff-Chu conjugate preamble pair with Cyclic Prefix (CP).
     
-    Zadoff-Chu sequences have excellent autocorrelation properties
-    (sharp peak, low sidelobe) making them ideal for synchronization.
+    This generates two sequences (root 'u' and root 'length - u'), prepends
+    a cyclic prefix to each, and concatenates them into a single frame.
     
     Parameters
     ----------
     length : int
-        Length of the preamble sequence
+        Length of each base ZC sequence (N_zc). Should ideally be prime.
     root_index : int
-        Root index of the sequence (coprime with length)
-    
+        Root index of the first sequence (u). Must be coprime with length.
+    cp_length : int
+        Number of samples to copy from the end of each ZC sequence 
+        to its beginning to act as a guard interval and allow circular convolution.
+        
     Returns
     -------
     ndarray
-        Complex Zadoff-Chu preamble (length `length`)
+        The full concatenated complex preamble array structured as:
+        [CP1 | ZC1 (root u) | CP2 | ZC2 (root N-u)]
     """
     n = np.arange(length)
-    exponent = -1j * np.pi * root_index * n * (n + 1) / length
-    zadoff_chu = np.exp(exponent)
-    return zadoff_chu
+    
+    # 1. Generate Preamble 1 (Root: u)
+    exponent_1 = -1j * np.pi * root_index * n * (n + 1) / length
+    zc1 = np.exp(exponent_1)
+    
+    # 2. Generate Preamble 2 (Conjugate Root: N - u)
+    conjugate_root = length - root_index
+    exponent_2 = -1j * np.pi * conjugate_root * n * (n + 1) / length
+    zc2 = np.exp(exponent_2)
+    
+    # 3. Apply Cyclic Prefix (CP)
+    if cp_length > 0:
+        # Slice the last 'cp_length' samples and prepend them
+        cp1 = zc1[-cp_length:]
+        cp2 = zc2[-cp_length:]
+        
+        block_1 = np.concatenate((cp1, zc1))
+        block_2 = np.concatenate((cp2, zc2))
+    else:
+        block_1 = zc1
+        block_2 = zc2
+        
+    # 4. Concatenate into a single transmission payload
+    full_preamble_frame = np.concatenate((block_1, block_2))
+    
+    return full_preamble_frame
 
 
-import numpy as np
 
 def add_rician_fading(signal, k_db, ebno_db, sps, num_taps=12, decay_factor=2.0):
     """

@@ -18,7 +18,7 @@ SAMPLING_FREQ = SAMPLE_RATE * SAMPLES_PER_SYMBOL  # 32 MHz
 CARRIER_FREQ = 2.4e9  # 2.4 GHz carrier frequency
 
 # Bit and data parameters
-NUMBER_OF_BITS = 30000
+NUMBER_OF_BITS = 5000
 BIT_MAPPING_QPSK = {
     (0, 0): (1 + 1j) / np.sqrt(2),
     (0, 1): (1 - 1j) / np.sqrt(2),
@@ -62,7 +62,7 @@ DOA = 30  # Angle of Arrival in degrees, used for calculating DOA-based delay di
 
 # SNR/EbN0 sweep values
 SNR_VALUES = [0, 2, 4, 6, 8, 10, 12]  # dB
-TARGET_SNR = 8  # Default SNR for simulations
+TARGET_SNR = 6  # Default SNR for simulations
 
 # Rician fading K-factors
 RICIAN_K_FACTORS = [8, 12, 16, 20, 24, 28]  # dB
@@ -72,7 +72,7 @@ TARGET_K_FACTOR = 12
 FREQ_OFFSET = 0
 
 # Delay parameters
-ANTENNA1_DELAY_VALUES = [160.4]  # Fractional delay for testing
+ANTENNA1_DELAY_VALUES = [180.4]  # Fractional delay for testing
 ANTENNA2_PHASE_SHIFT_VALUES = []
 ANTENNA2_PHASE_SHIFT_VALUES.append(2*np.pi*CARRIER_FREQ*ANTENNAS_DISTANCE * np.sin(np.radians(DOA))/ SPEED_OF_LIGHT)
 print(f"ANTENNA2_PHASE_SHIFT_VALUES: {ANTENNA2_PHASE_SHIFT_VALUES}")

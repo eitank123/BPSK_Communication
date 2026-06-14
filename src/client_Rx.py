@@ -108,15 +108,73 @@ class Client_Rx:
         delta = np.clip(delta, -0.5, 0.5)
         return peak + delta, delta
 
-    def estimate_fractional_delay(self, rx_signal, preamble, sps, filter_span):
-        reference = self.generate_reference_preamble(preamble, sps)
-        correlation = signal.correlate(rx_signal, reference, mode='full')
-        refined_peak, frac = self.parabolic_interpolation(correlation)
+    def estimate_fractional_delay(self, rx_signal, full_preamble, cp_length, sps, filter_span):
+        """
+        Estimates true fractional delay and Doppler shift using a full conjugate ZC frame.
         
-        coarse_delay = refined_peak - (len(reference) - 1)
+        Parameters
+        ----------
+        rx_signal : ndarray
+            The received signal vector.
+        full_preamble : ndarray
+            The complete concatenated transmission block: [CP1 + ZC1(u) + CP2 + ZC2(N-u)]
+        cp_length : int
+            The number of samples in the Cyclic Prefix before upsampling.
+        sps : int
+            Samples per symbol.
+        filter_span : int
+            The span of the pulse shaping filter, used to calculate group delay.
+        """
+        # --- Dynamically extract structures from the full preamble ---
+        total_len = len(full_preamble)
+        half_len = total_len // 2  # Length of one block: (N_zc + CP)
+        
+        # Extract pure ZC sequences (stripping the CP ensures a perfectly sharp correlation peak)
+        preamble_u = full_preamble[cp_length : half_len]
+        preamble_v = full_preamble[half_len + cp_length : total_len]
+        
+        # Calculate the physical design gap in the upsampled domain
+        # The distance between the start of ZC1 and the start of ZC2 is exactly one block length
+        n_gap_samples = half_len * sps
+        
+        # 1. Generate the upsampled/pulse-shaped references for both pure roots
+        ref_u = self.generate_reference_preamble(preamble_u, sps)
+        ref_v = self.generate_reference_preamble(preamble_v, sps)
+        
+        # 2. Run parallel cross-correlations against the received signal
+        corr_u = signal.correlate(rx_signal, ref_u, mode='full')
+        corr_v = signal.correlate(rx_signal, ref_v, mode='full')
+        
+        # 3. Find precise fractional peaks for both
+        refined_peak_u, _ = self.parabolic_interpolation(corr_u)
+        refined_peak_v, _ = self.parabolic_interpolation(corr_v)
+        
+        # 4. Map 'full' correlation indices back to the physical signal time-base
+        t1 = refined_peak_u - (len(ref_u) - 1)
+        t2 = refined_peak_v - (len(ref_v) - 1)
+        
+        # 5. Apply Conjugate Math to isolate True Time and Doppler Shift
+        t2_aligned = t2 - n_gap_samples
+        
+        # True start time of ZC1 (Doppler time-shifts cancel out)
+        true_time_zc1 = (t1 + t2_aligned) / 2.0
+        
+        # The true start of the entire payload is BEFORE ZC1 (we must step back over CP1)
+        # Multiplying cp_length by sps converts it to the upsampled time-domain
+        true_time_start = true_time_zc1 - (cp_length * sps)
+        
+        # The difference isolates the time-shift caused purely by Carrier Frequency Offset
+        doppler_shift_samples = (t2_aligned - t1) / 2.0
+        
+        # 6. Correct for the filter group delay (Subtracting to find the true physical start)
         reference_group_delay = (filter_span * sps) // 2
-        estimated_delay = coarse_delay + reference_group_delay
-        return estimated_delay, frac, correlation
+        true_time_start += reference_group_delay
+        
+        # 7. Split into integer index and fractional component for the cubic interpolator
+        estimated_delay = int(np.floor(true_time_start))
+        frac = true_time_start - estimated_delay
+        
+        return estimated_delay, frac, doppler_shift_samples, (corr_u, corr_v)
 
     # --- METHOD 3: Maximum Likelihood Grid Search ---
     def ml_fractional_delay(self, rx_signal, preamble, sps, filter_span, grid_resolution=0.01):
@@ -273,7 +331,6 @@ class Client_Rx:
 
         Y_preamble = np.fft.fft(rx_preamble)
         X_preamble = np.fft.fft(ideal_preamble)
-
         # Raw channel estimate at preamble resolution
         H_est = Y_preamble / X_preamble
 
@@ -284,16 +341,13 @@ class Client_Rx:
         # The CP length defines the maximum physical delay spread of your channel.
         h_denoised = np.zeros_like(h_time)
         h_denoised[:cp_length] = h_time[:cp_length]
-
         # Zero-pad the denoised impulse response to target data block size
         h_padded = np.zeros(data_block_size, dtype=complex)
         h_padded[:len(h_denoised)] = h_denoised
-
         # Transform back to Frequency Domain at the new resolution
         H_block = np.fft.fft(h_padded)
 
         #self.plot_channel_estimation(h_time, H_block)
-
 
         # Calculate actual average channel power to correctly scale the noise ratio
         channel_power = np.mean(np.abs(H_block)**2)
@@ -307,12 +361,31 @@ class Client_Rx:
 
     def equalize_sc_fde(self, rx_signal, sps, ideal_preamble, current_snr, data_block_size, cp_length):
         """SC-FDE equalization: downsample, remove CP, equalize in frequency domain."""
+        # 1. Downsample down to symbol rate
         rx_symbols = rx_signal[::sps]
-        rx_preamble = rx_symbols[:len(ideal_preamble)]
-
-        H_est, W_mmse = self.estimate_channel_and_weights(rx_preamble, ideal_preamble, data_block_size, current_snr, cp_length)
         
-        data_stream = rx_symbols[len(ideal_preamble):]
+        # ideal_preamble is the full [CP1 + ZC1 + CP2 + ZC2] block
+        # Calculate the size of just a single block sequence
+        single_block_len = len(ideal_preamble) // 2  
+        
+        # Extract only the first preamble block
+        rx_preamble_block = rx_symbols[:single_block_len]
+        ideal_preamble_block = ideal_preamble[:single_block_len]
+
+        # STRIP the CP from both before running channel estimation 
+        # to force them to match data_block_size (e.g., 286 - 30 = 256)
+        rx_preamble_pure = rx_preamble_block[cp_length:]
+        ideal_preamble_pure = ideal_preamble_block[cp_length:]
+
+        # Now pass the clean, size-256 blocks down
+        H_est, W_mmse = self.estimate_channel_and_weights(
+            rx_preamble_pure, ideal_preamble_pure, data_block_size, current_snr, cp_length
+        )
+        
+        # Jump completely over BOTH preambles to reach the data payload
+        header_offset = 2 * single_block_len
+        data_stream = rx_symbols[header_offset:]
+        
         block_stride = data_block_size + cp_length
         equalized_symbols = []
 
@@ -328,23 +401,42 @@ class Client_Rx:
 
         if len(equalized_symbols) == 0:
             return np.array([], dtype=complex)
+            
         return np.concatenate(equalized_symbols), H_est
 
-    def equalize_blocks_only(self, time_symbols, W_mmse, data_block_size, cp_length):
-        """Equalize downsampled symbols using MMSE weights."""
+    def equalize_blocks_only(self, time_symbols, W_mmse, data_block_size, cp_length, header_offset=0):
+        """
+        Equalize downsampled symbols using MMSE weights.
+        
+        Parameters:
+        -----------
+        time_symbols : ndarray
+            The full downsampled received signal (or just the payload).
+        header_offset : int
+            The number of samples to skip to get past the preambles.
+        """
+        # FIX: Slice the array to skip over the preambles completely
+        data_stream = time_symbols[header_offset:]
+        
         block_stride = data_block_size + cp_length
         equalized_list = []
 
-        for i in range(0, len(time_symbols), block_stride):
-            block_with_cp = time_symbols[i : i + block_stride]
+        for i in range(0, len(data_stream), block_stride):
+            block_with_cp = data_stream[i : i + block_stride]
+            
+            # If the remaining data isn't a full block, drop it
             if len(block_with_cp) < block_stride:
                 break
 
+            # Strip the CP from the payload block
             block_data = block_with_cp[cp_length:]
+            
+            # Transform, apply the MMSE weights, and return to time domain
             Y = np.fft.fft(block_data)
             X_hat = Y * W_mmse
             equalized_list.append(np.fft.ifft(X_hat))
 
         if len(equalized_list) == 0:
             return np.array([], dtype=complex)
+            
         return np.concatenate(equalized_list)
