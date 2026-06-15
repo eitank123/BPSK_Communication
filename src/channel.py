@@ -67,7 +67,7 @@ def generate_zadoff_chu_preamble(length, root_index=1):
 
 
 
-def add_rician_fading(signal, k_db, ebno_db, sps, num_taps=8, decay_factor=2):
+def add_rician_fading(signal, k_db, ebno_db, sps, num_taps=0, decay_factor=2):
     """
     Apply a frequency-selective Rician fading channel using a Tapped Delay Line
     model with an exponential Power Delay Profile and AWGN.
@@ -96,11 +96,30 @@ def add_rician_fading(signal, k_db, ebno_db, sps, num_taps=8, decay_factor=2):
     N = len(signal)
     K_linear = 10.0 ** (k_db / 10.0)
 
+    signal_power = np.mean(np.abs(signal) ** 2)
+
+    # Symbol energy
+    Es = signal_power * sps
+
+    # QPSK: Es = 2Eb
+    EbN0 = 10.0 ** (ebno_db / 10.0)
+    EsN0 = 2.0 * EbN0
+
+    N0 = Es / EsN0
+
+    noise = np.sqrt(N0 / 2.0) * (
+        np.random.randn(N) +
+        1j * np.random.randn(N)
+    )
+
+    if num_taps == 0:
+        return signal + noise
+
     # ------------------------------------------------------------------
     # STEP 1: Generate tap delays
     # ------------------------------------------------------------------
     # Spread taps over roughly 4 symbol durations
-    max_delay = max(num_taps, 4 * sps)
+    max_delay = max(num_taps, 1 * sps)
 
     tap_delays = np.sort(
         np.random.choice(
@@ -155,22 +174,6 @@ def add_rician_fading(signal, k_db, ebno_db, sps, num_taps=8, decay_factor=2):
     # ------------------------------------------------------------------
     # STEP 6: Add AWGN
     # ------------------------------------------------------------------
-    signal_power = np.mean(np.abs(signal) ** 2)
-
-    # Symbol energy
-    Es = signal_power * sps
-
-    # QPSK: Es = 2Eb
-    EbN0 = 10.0 ** (ebno_db / 10.0)
-    EsN0 = 2.0 * EbN0
-
-    N0 = Es / EsN0
-
-    noise = np.sqrt(N0 / 2.0) * (
-        np.random.randn(N) +
-        1j * np.random.randn(N)
-    )
-
     return faded_signal + noise
 
 def upsample_symbols(symbols, sps, is_complex=True):

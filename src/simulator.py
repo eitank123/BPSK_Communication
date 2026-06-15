@@ -234,7 +234,8 @@ class SimulationEngine:
         total_symbols = cfg.PREAMBLE_LENGTH + self.num_data_symbols
         t_samples = est_delay + np.arange(total_symbols * sps)
         frame_samples = cubic_interpolate(filt_signal, t_samples)
-        
+        #self.plot_constellation(frame_samples, title="Method 2: Parabolic Interpolation Constellation")
+
         equalized, H_est = receiver.equalize_sc_fde(
             frame_samples, sps, preamble, cfg.TARGET_SNR,
             cfg.DATA_BLOCK_SIZE, cfg.CP_LENGTH

@@ -218,7 +218,7 @@ def plot_delay_tracking(snr_range, delay_matrix, labels, true_delay):
                 label='Perfect Synchronization (Zero Error)')
     
     for i in range(delay_matrix.shape[0]):
-        abs_error = np.abs(delay_matrix[i] - true_delay)
+        abs_error = delay_matrix[i]  # Already calculated as absolute error in main_refactored.py
         plt.plot(snr_range, abs_error, marker=markers[i % len(markers)],
                  linestyle='-', alpha=0.8, linewidth=1.5, label=labels[i])
         

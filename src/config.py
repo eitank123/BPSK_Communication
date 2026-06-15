@@ -18,7 +18,7 @@ SAMPLING_FREQ = SAMPLE_RATE * SAMPLES_PER_SYMBOL  # 32 MHz
 CARRIER_FREQ = 2.4e9  # 2.4 GHz carrier frequency
 
 # Bit and data parameters
-NUMBER_OF_BITS = 10000
+NUMBER_OF_BITS = 5000
 BIT_MAPPING_QPSK = {
     (0, 0): (1 + 1j) / np.sqrt(2),
     (0, 1): (1 - 1j) / np.sqrt(2),
@@ -65,7 +65,7 @@ SNR_VALUES = [4, 6, 8, 10, 12, 14, 16]  # dB
 TARGET_SNR = 8  # Default SNR for simulations
 
 # Rician fading K-factors
-RICIAN_K_FACTORS = [4, 6, 8, 10, 12, 14, 16]  # dB
+RICIAN_K_FACTORS = [2, 4, 6, 8, 10, 12, 14, 16, 18, 20]  # dB
 TARGET_K_FACTOR = 10
 
 # Frequency offset

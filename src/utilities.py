@@ -117,7 +117,7 @@ def calculate_range_error(estimated_delay, true_delay, sampling_freq, speed_of_l
     float
         Range error in meters
     """
-    delay_error_samples = estimated_delay - true_delay
+    delay_error_samples = estimated_delay
     range_error = delay_error_samples * (speed_of_light / sampling_freq)
     return range_error
 

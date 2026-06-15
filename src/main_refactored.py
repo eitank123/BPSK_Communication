@@ -60,10 +60,11 @@ def run_phase1_snr_sweep(engine, betas, delays, sps):
     num_k_factors = len(cfg.RICIAN_K_FACTORS) # 6
     matrix_doa = np.zeros((num_methods, num_k_factors))
     
-    iterations=20
+    iterations=5
     for beta in betas:
         for delay in delays:
             for i in range(iterations):
+                print(f"Iteration {i+1}/{iterations} - Beta: {beta}, Delay: {delay}")
                 for antenna in range(1, 3):  # Antenna 1 and Antenna 2
                     # Run the sweep
                     results = engine.run_snr_sweep(beta, delay, sps, antenna)
@@ -75,10 +76,12 @@ def run_phase1_snr_sweep(engine, betas, delays, sps):
                                 ber[k] = [a + b for a, b in zip(ber[k], results['ber'][k])]
 
                         if sum_delay is None:
-                            sum_delay = {k: v.copy() for k, v in results['delay'].items()}
+                            # Convert lists to NumPy arrays on the fly and compute the absolute difference
+                            sum_delay = {k: np.abs(np.array(v) - delay) for k, v in results['delay'].items()}
                         else:
+                            # Update the existing NumPy arrays in sum_delay by adding the new absolute differences
                             for k in sum_delay:
-                                sum_delay[k] = [a + b for a, b in zip(sum_delay[k], results['delay'][k])]
+                                sum_delay[k] += np.abs(np.array(results['delay'][k]) - delay)
                         if H_est_ant1 is None:
                             H_est_ant1 = {k: v.copy() for k, v in results['H_est'].items()}
                         else:
@@ -102,7 +105,7 @@ def run_phase1_snr_sweep(engine, betas, delays, sps):
                 k: [x / iterations for x in v]
                 for k, v in ber.items()
             }
-            delay_avg = {
+            delay_error_avg = {
                 k: [x / iterations for x in v]
                 for k, v in sum_delay.items()
             }
@@ -118,10 +121,10 @@ def run_phase1_snr_sweep(engine, betas, delays, sps):
             matrix_ber = np.array([
                 ber[i] for i in range(1, 7)
             ])
-            matrix_delay = np.array([
-                delay_avg[i] for i in range(1, 7)
+            matrix_delay = np.array(
+                [delay_error_avg[i]
+                for i in range(1, 7)
             ])
-            
             # Print summary table
             print(f"\nBER Results Summary (Delay={delay}):")
             print(f"{'K-Factor (dB)':<15}", end='')
@@ -145,7 +148,7 @@ def run_phase1_snr_sweep(engine, betas, delays, sps):
                         cfg.SAMPLING_FREQ,
                         cfg.SPEED_OF_LIGHT
                     )
-                    for est_delay in results['delay'][method_id]
+                    for est_delay in delay_error_avg[method_id]
                 ]
                 range_error_vs_snr_final[method_id] = range_errors
                 

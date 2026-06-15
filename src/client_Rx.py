@@ -15,6 +15,7 @@ from scipy import signal
 from scipy.interpolate import interp1d
 from signal_processing import cubic_interpolate
 import matplotlib.pyplot as plt
+import config as cfg
 
 class Client_Rx:
     def __init__(self, signal_list, is_qpsk=False):
@@ -333,8 +334,9 @@ class Client_Rx:
         # ------------------------------------------------------------------
         # MMSE equalizer
         # ------------------------------------------------------------------
-
-        noise_variance_ratio = noise_power_time
+        snr_linear = 10**(cfg.TARGET_SNR / 10) 
+        noise_variance_ratio = 1 / snr_linear
+        #noise_variance_ratio = noise_power_time
 
         W_mmse = np.conj(H_block) / (
             np.abs(H_block) ** 2 + noise_variance_ratio
