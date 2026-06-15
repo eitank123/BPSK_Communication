@@ -119,7 +119,7 @@ class Client_Rx:
         return estimated_delay, frac, correlation
 
     # --- METHOD 3: Maximum Likelihood Grid Search ---
-    def ml_fractional_delay(self, rx_signal, preamble, sps, filter_span, grid_resolution=0.01):
+    def ml_fractional_delay(self, rx_signal, preamble, sps, filter_span, grid_resolution=0.005):
         """Estimate fractional delay via ML grid search."""
         reference = self.generate_reference_preamble(preamble, sps)
         correlation = signal.correlate(rx_signal, reference, mode='full')
@@ -268,41 +268,78 @@ class Client_Rx:
         plt.tight_layout()
         plt.show()
 
-    def estimate_channel_and_weights(self, rx_preamble, ideal_preamble, data_block_size, current_snr, cp_length):
-        """Estimate channel via preamble, denoise in time-domain, and compute MMSE weights."""
+    def estimate_channel_and_weights(self, rx_preamble, ideal_preamble,
+                                 data_block_size, current_snr, cp_length):
+        """
+        Estimate channel via preamble, denoise in delay domain,
+        and compute MMSE equalizer weights.
+        """
 
+        # LS channel estimate
         Y_preamble = np.fft.fft(rx_preamble)
         X_preamble = np.fft.fft(ideal_preamble)
 
-        # Raw channel estimate at preamble resolution
-        H_est = Y_preamble / X_preamble
+        eps = 1e-12
+        H_est = Y_preamble / (X_preamble + eps)
 
-        # Transform to Time Domain (Impulse Response)
+        # Convert to delay domain
         h_time = np.fft.ifft(H_est)
 
-        # --- FIX: Denoise by keeping only the taps within the Cyclic Prefix span ---
-        # The CP length defines the maximum physical delay spread of your channel.
+        # ------------------------------------------------------------------
+        # Delay-domain denoising
+        # ------------------------------------------------------------------
+
+        # Limit search to physically possible delays
+        h_cp = h_time[:cp_length]
+
+        power = np.abs(h_cp) ** 2
+
+        # Keep taps above 0.1% of strongest tap
+        threshold = 0.001 * np.max(power)
+
+        significant = power > threshold
+
         h_denoised = np.zeros_like(h_time)
-        h_denoised[:cp_length] = h_time[:cp_length]
 
-        # Zero-pad the denoised impulse response to target data block size
+        if np.any(significant):
+            last_tap = np.max(np.where(significant)[0]) + 1
+            h_denoised[:last_tap] = h_time[:last_tap]
+        else:
+            # Fallback if thresholding fails
+            h_denoised[:cp_length] = h_time[:cp_length]
+
+        # ------------------------------------------------------------------
+        # Estimate noise power from discarded taps
+        # ------------------------------------------------------------------
+
+        discarded = h_cp[~significant]
+
+        if len(discarded) > 0:
+            noise_power_time = np.mean(np.abs(discarded) ** 2)
+        else:
+            snr_linear = 10 ** (current_snr / 10.0)
+            noise_power_time = np.mean(np.abs(h_cp) ** 2) / snr_linear
+
+        # ------------------------------------------------------------------
+        # Resample channel estimate to data FFT size
+        # ------------------------------------------------------------------
+
         h_padded = np.zeros(data_block_size, dtype=complex)
-        h_padded[:len(h_denoised)] = h_denoised
+        copy_len = min(len(h_denoised), data_block_size)
+        h_padded[:copy_len] = h_denoised[:copy_len]
 
-        # Transform back to Frequency Domain at the new resolution
         H_block = np.fft.fft(h_padded)
 
-        #self.plot_channel_estimation(h_time, H_block)
+        # ------------------------------------------------------------------
+        # MMSE equalizer
+        # ------------------------------------------------------------------
 
+        noise_variance_ratio = noise_power_time
 
-        # Calculate actual average channel power to correctly scale the noise ratio
-        channel_power = np.mean(np.abs(H_block)**2)
-        snr_linear = 10 ** (current_snr / 10.0)
-        
-        # Scale your noise variance ratio relative to the actual estimated channel power
-        noise_variance_ratio = channel_power / snr_linear
+        W_mmse = np.conj(H_block) / (
+            np.abs(H_block) ** 2 + noise_variance_ratio
+        )
 
-        W_mmse = np.conj(H_block) / (np.abs(H_block)**2 + noise_variance_ratio)
         return H_block, W_mmse
 
     def equalize_sc_fde(self, rx_signal, sps, ideal_preamble, current_snr, data_block_size, cp_length):

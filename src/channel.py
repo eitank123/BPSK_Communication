@@ -66,92 +66,112 @@ def generate_zadoff_chu_preamble(length, root_index=1):
     return zadoff_chu
 
 
-import numpy as np
 
-def add_rician_fading(signal, k_db, ebno_db, sps, num_taps=12, decay_factor=2.0):
+def add_rician_fading(signal, k_db, ebno_db, sps, num_taps=8, decay_factor=2):
     """
-    Apply a frequency-selective Rician fading channel using a Tapped Delay Line (TDL) 
-    model with an exponential Power Delay Profile, followed by AWGN calibration.
-    
+    Apply a frequency-selective Rician fading channel using a Tapped Delay Line
+    model with an exponential Power Delay Profile and AWGN.
+
     Parameters
     ----------
     signal : ndarray
-        Input oversampled baseband signal (e.g., after pulse shaping).
+        Input oversampled baseband signal.
     k_db : float
-        Rician K-factor in dB (ratio of LoS to total NLoS power).
+        Rician K-factor in dB.
     ebno_db : float
         Target Eb/N0 in dB.
     sps : int
         Samples per symbol.
     num_taps : int, optional
-        Number of multipath taps (resolvable echoes at sample spacing). Default is 8.
+        Number of multipath taps.
     decay_factor : float, optional
-        Determines how fast the multipath echo power decays over time. Default is 2.0.
-        
+        Exponential PDP decay factor.
+
     Returns
     -------
     ndarray
-        Convolved (faded) signal with AWGN added, matched to input length.
+        Faded signal with AWGN added.
     """
+
     N = len(signal)
-    K_linear = 10 ** (k_db / 10.0)
-    
-    # ========================================================================
-    # STEP 1: Generate Power Delay Profile (PDP) for NLoS components
-    # ========================================================================
-    # Exponentially decaying power for delayed echoes
+    K_linear = 10.0 ** (k_db / 10.0)
+
+    # ------------------------------------------------------------------
+    # STEP 1: Generate tap delays
+    # ------------------------------------------------------------------
+    # Spread taps over roughly 4 symbol durations
+    max_delay = max(num_taps, 4 * sps)
+
+    tap_delays = np.sort(
+        np.random.choice(
+            np.arange(max_delay),
+            size=num_taps,
+            replace=False
+        )
+    )
+
+    # Force LOS path to arrive first
+    tap_delays[0] = 0
+
+    # ------------------------------------------------------------------
+    # STEP 2: Power Delay Profile
+    # ------------------------------------------------------------------
     p_nlos = np.exp(-np.arange(num_taps) / decay_factor)
-    p_nlos /= np.sum(p_nlos)  # Normalize NLoS profile power sum to 1
-    
-    # ========================================================================
-    # STEP 2: Allocate LoS and NLoS Power (Total Channel Power E[|h|^2] = 1)
-    # ========================================================================
-    # The LoS component exists only on the first arrival (Tap 0)
+    p_nlos /= np.sum(p_nlos)
+
+    # ------------------------------------------------------------------
+    # STEP 3: Generate Rician tap gains
+    # ------------------------------------------------------------------
     h_los = np.zeros(num_taps, dtype=complex)
-    h_los[0] = np.sqrt(K_linear / (K_linear + 1))
-    
-    # Scale NLoS variances per tap based on the PDP and total NLoS allocation
-    sigma_nlos = np.sqrt(p_nlos / (2.0 * (K_linear + 1)))
-    
-    # Generate random complex Gaussian fading for each tap
-    h_nlos = sigma_nlos * (np.random.randn(num_taps) + 1j * np.random.randn(num_taps))
-    
-    # Combine LoS and NLoS to form the Taped Delay Line impulse response
-    h_taps = h_los + h_nlos
+    h_los[0] = np.sqrt(K_linear / (K_linear + 1.0))
 
-    """plt.figure(figsize=(8, 4))
-    plt.stem(np.abs(h_taps), basefmt=" ")
-    plt.title(f"Rician Tapped Delay Line Impulse Response (K={k_db} dB)")
-    plt.xlabel("Tap Index (Sample Delay)")
-    plt.ylabel("Magnitude")
-    plt.grid(True, linestyle='--', alpha=0.7)
-    plt.show()
-    """
-    # ========================================================================
-    # STEP 3: Apply Channel via Linear Convolution (Introduces ISI)
-    # ========================================================================
-    # Convolution mimics the physical arrival of delayed multipath echoes
-    faded_signal = np.convolve(signal, h_taps, mode='full')[:N]
-    
-    # ========================================================================
-    # STEP 4: Calibrate and Add AWGN based on Transmitted Signal Power
-    # ========================================================================
-    # Measure the clean transmitted symbol energy baseline
+    sigma_nlos = np.sqrt(
+        p_nlos / (2.0 * (K_linear + 1.0))
+    )
+
+    h_nlos = sigma_nlos * (
+        np.random.randn(num_taps) +
+        1j * np.random.randn(num_taps)
+    )
+
+    tap_gains = h_los + h_nlos
+
+    # ------------------------------------------------------------------
+    # STEP 4: Build sparse channel impulse response
+    # ------------------------------------------------------------------
+    h = np.zeros(max_delay + 1, dtype=complex)
+
+    for delay, gain in zip(tap_delays, tap_gains):
+        h[delay] += gain
+
+    # Normalize average channel power
+    h /= np.sqrt(np.sum(np.abs(h) ** 2))
+
+    # ------------------------------------------------------------------
+    # STEP 5: Apply channel
+    # ------------------------------------------------------------------
+    faded_signal = np.convolve(signal, h, mode='full')[:N]
+
+    # ------------------------------------------------------------------
+    # STEP 6: Add AWGN
+    # ------------------------------------------------------------------
     signal_power = np.mean(np.abs(signal) ** 2)
-    es = signal_power * sps
-    
-    # Convert Eb/N0 to Es/N0 for QPSK (2 bits/symbol)
-    ebno_linear = 10 ** (ebno_db / 10.0)
-    esno_linear = 2.0 * ebno_linear
-    
-    # Noise power spectral density
-    N0 = es / esno_linear
-    
-    # Generate complex AWGN (variance distributed equally to Real and Imag)
-    noise = np.sqrt(N0 / 2.0) * (np.random.randn(N) + 1j * np.random.randn(N))
-    
-    return faded_signal + noise
 
+    # Symbol energy
+    Es = signal_power * sps
+
+    # QPSK: Es = 2Eb
+    EbN0 = 10.0 ** (ebno_db / 10.0)
+    EsN0 = 2.0 * EbN0
+
+    N0 = Es / EsN0
+
+    noise = np.sqrt(N0 / 2.0) * (
+        np.random.randn(N) +
+        1j * np.random.randn(N)
+    )
+
+    return faded_signal + noise
 
 def upsample_symbols(symbols, sps, is_complex=True):
     """

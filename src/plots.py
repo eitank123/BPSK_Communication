@@ -222,12 +222,47 @@ def plot_delay_tracking(snr_range, delay_matrix, labels, true_delay):
         plt.plot(snr_range, abs_error, marker=markers[i % len(markers)],
                  linestyle='-', alpha=0.8, linewidth=1.5, label=labels[i])
         
-    plt.title("Delay Estimation Absolute Error vs. SNR", fontsize=12, fontweight='bold')
-    plt.xlabel("$E_b/N_0$ (dB)", fontsize=11)
+    plt.title("Delay Estimation Absolute Error vs. K-factor", fontsize=12, fontweight='bold')
+    plt.xlabel("K_factor (dB)", fontsize=11)
     plt.ylabel("Absolute Delay Error (Samples)", fontsize=11)
     plt.grid(True, which="both", linestyle=":", alpha=0.6)
     plt.legend(loc="best", fontsize=10)
     plt.tight_layout()
     plt.show()
 
+def plot_doa_tracking(k_factors, doa_matrix, labels, true_doa):
+    """
+    Plot absolute Direction of Arrival (DOA) estimation error vs Rician K-factor.
+    
+    Parameters
+    ----------
+    k_factors : array-like
+        Array of Rician K-factors in dB.
+    doa_matrix : ndarray
+        2D array of shape (num_methods, num_k_factors) containing estimated angles.
+    labels : list of str
+        Names/labels for each synchronization/estimation method.
+    true_doa : float
+        The ground-truth geometric angle of arrival in degrees.
+    """
+    plt.figure(figsize=(9, 6))
+    markers = ['o', 's', '^', 'x', 'd', 'v']
+    
+    # Baseline for zero error
+    plt.axhline(y=0, color='black', linestyle='--', linewidth=2, 
+                label='Perfect Estimation (Zero Error)')
+    
+    # Plot absolute angular error for each method
+    for i in range(doa_matrix.shape[0]):
+        abs_error = np.abs(doa_matrix[i] - true_doa)
+        plt.plot(k_factors, abs_error, marker=markers[i % len(markers)],
+                 linestyle='-', alpha=0.8, linewidth=1.5, label=labels[i])
+        
+    plt.title("DOA Estimation Absolute Error vs. K-factor", fontsize=12, fontweight='bold')
+    plt.xlabel("K-factor (dB)", fontsize=11)
+    plt.ylabel("Absolute DOA Error (Degrees)", fontsize=11)
+    plt.grid(True, which="both", linestyle=":", alpha=0.6)
+    plt.legend(loc="best", fontsize=10)
+    plt.tight_layout()
+    plt.show()
 

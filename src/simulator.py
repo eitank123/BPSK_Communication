@@ -283,7 +283,7 @@ class SimulationEngine:
         # Initialize Loop Filter variables
         timing_phase = 0.0
         integrator = 0.0
-        kp, ki = 0.03, 0.001  # PI gains
+        kp, ki = 0.04, 0.001  # PI gains
         
         equalized_payload = []
 
@@ -370,7 +370,7 @@ class SimulationEngine:
         # Loop Parameters
         timing_phase = 0.0
         integrator = 0.0
-        kp, ki = 0.04, 0.002  # Damped for stability
+        kp, ki = 0.03, 0.001  # Damped for stability
         
         k_bins = np.fft.fftfreq(cfg.DATA_BLOCK_SIZE) * cfg.DATA_BLOCK_SIZE
         equalized_payload = []
@@ -453,7 +453,7 @@ class SimulationEngine:
         # Loop Parameters
         phase_offset = 0.0
         clock_drift = 0.0
-        mu_phase, mu_drift = 0.04, 0.0002
+        mu_phase, mu_drift = 0.03, 0.0001
         
         k_bins = np.fft.fftfreq(cfg.DATA_BLOCK_SIZE) * cfg.DATA_BLOCK_SIZE
         equalized_payload = []
