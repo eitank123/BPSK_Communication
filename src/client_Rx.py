@@ -59,7 +59,6 @@ class Client_Rx:
             # Compensate only for the reference filter shift
             corrected_delay = coarse_delay + reference_group_delay
             self.detected_delays_list.append(corrected_delay)
-            print(f"Detected delay (Approach 1): {corrected_delay:.3f}")
 
         return self.detected_delays_list
 
@@ -256,3 +255,4 @@ class Client_Rx:
 
         final_phase_offset = phase_offset
         return np.array(recovered_symbols), final_phase_offset
+    
